@@ -1,4 +1,6 @@
 import { greeting } from "./greeting.js";
+import { go } from "./nav.js";
+import "./chat.js";
 
 const el = document.getElementById("greeting");
 
@@ -12,17 +14,11 @@ const span = (className, text) => {
 const { lead, hook } = greeting();
 el.replaceChildren(span("greet__lead", lead), span("greet__hook", hook));
 
-const tabs = [...document.querySelectorAll(".tab")];
+document.getElementById("wordmark").addEventListener("click", () => go("home"));
 
-for (const tab of tabs) {
+for (const tab of document.querySelectorAll(".tab")) {
   tab.addEventListener("click", () => {
     if (tab.getAttribute("aria-selected") === "true") return;
-    for (const other of tabs) {
-      const on = other === tab;
-      other.setAttribute("aria-selected", String(on));
-      const view = document.getElementById(other.dataset.view);
-      view.hidden = !on;
-      view.classList.toggle("is-active", on);
-    }
+    go(tab.dataset.view);
   });
 }

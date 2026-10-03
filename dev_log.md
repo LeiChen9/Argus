@@ -133,3 +133,92 @@ PIL 的 `ImageDraw.floodfill` **不可靠**：实测 thresh=8 下把中心像素
 `main.py` 一行没动，`/api/*` 全部保留但首页不调用。
 
 **待定**：`--accent` 仍是 FluentChat 的 `#5e5ce6` 紫，Argus 品牌色未定。
+
+---
+
+## 2026-10-03 — Session 1 补记 4：Chat 视图（Slice 5）
+
+**做了什么**
+
+- `index.html` — `#view-chat` 重构：hero(空状态) + `.msgs` + `.composer`
+  （上传按钮 / 输入框 / 发送），去掉该 view 上的 `view--center`
+- `css/app.css` — +130 行，全新：`.chat` `.msgs` `.msg` `.bubble` `.avatar`
+  `.composer*` `.icon-btn` + `bubbleIn` 入场动画 + 两个新 token
+- `js/chat.js` — 新模块：气泡渲染、调 `/api/chat`、首条后收 hero、文件名 chip
+- `js/app.js` — +1 行 `import "./chat.js"`
+
+**验证**
+```
+/  css/app.css  js/app.js  js/chat.js   全部 200
+POST /api/chat  ->  {"reply":"收到：我在字节做过三年数据分析师"}
+死代码扫描: CSS 未引用 class 无 / 引用但未定义 无 / 未用变量 无 / id 双向匹配 无
+```
+
+**FluentChat 这次没什么可抄的**：它是语音应用，`bubble|msg|composer|avatar|header`
+在 css/js/html 里命中 **0**。能抄的只有 token、`.view` 入场动画、`.tabbar`。
+所以这片 CSS 是新写的，上一片那种"逐字节移植"不适用——**别再默认能抄**。
+
+**头像不做人脸裁切**：NPC 源图 1024×1024，**脸在哪个位置我不知道**（读不了图）。
+从 alpha 轮廓只能测出耳朵在 y≈73-184。选方形圆角显示完整角色，零猜测。
+若要圆形裁脸，需先拿到脸的坐标。
+
+**发现并修掉一个我自己写错的数字**：CSS 注释里写暗色气泡"~6.5:1"，
+实算是 **5.97:1**。注释里的错数字比没注释更糟，已改。
+
+**为什么 `--bubble-me` 要和 `--accent` 分开**：暗色 `--accent: #7d7aff` 配白字
+只有 **3.44:1**，不过 WCAG AA。实测后单独压深到 `#514ee0`(5.97:1)。
+对比度是算出来的，不是估的。
+
+**扫描里两个假警报**（记下来免得下次又被绊）：
+- `msg--me` / `msg--them` 被报"CSS 未引用"——实际由 `chat.js:11` 的
+  模板字符串 `` `msg msg--${who}` `` 运行时生成，正则看不穿模板
+- `view-chat/jobs/me` 被报"JS 未用"——实际由 `app.js:24` 的 `dataset.view` 动态取
+
+**真死代码 1 处**：`index.html` 的 `id="send"` 没有任何 JS 引用（按钮靠
+`type="submit"` 触发表单处理器，不需要 id）。**故意留着**，将来做浏览器自动化测试
+要当选择器。8 个字符，不值得为洁癖删掉。
+
+**后端零改动**。`/api/persona` 和 `PERSONA_MOCK` 现在前端一处都不调——
+Persona 更新逻辑尚未设计，这是下一件事。
+
+---
+
+## 2026-10-03 — Session 1 补记 5：首页/Chat 分离 + 修一个真 bug
+
+**首页与 Chat 拆成两个 view**
+
+顶部加全局 `.topbar`，纯文字 "Argus" 标识是**回首页的唯一入口**。
+首页 `#view-home`（hero）不再和 Chat 共用。Chat 页 `.topbar` 换成 `.chat__head`
+（返回键 + Argus 头像 + 名字），`.tabbar` 隐藏、composer 顶替。
+新增 `js/nav.js` 的 `go(name)` 统一切页 —— 原来 tab 循环假设"每个 view 对应一个 tab"，
+首页（无 tab）和 Chat（无 tab 且要藏 tabbar）都打破了这个假设。
+`app.js` 和 `chat.js` 从 `nav.js` import，不走循环依赖。
+
+**BUG：Chat 页回车会跳回首页**
+
+根因：Slice 6 重写 `app.js` 时**漏掉了 `import "./chat.js"`**，chat.js 从未被浏览器下载。
+后果链条：
+```
+chat.js 未加载 → 无 submit 监听 → 回车触发原生表单提交
+→ <form> 无 action，提交到当前 URL → 页面重新加载
+→ 默认激活 #view-home → 看起来像"回车送我回首页"
+```
+同时被弄死：返回键、`+` 上传、文件名 chip。
+
+**为什么我的检查没抓到**：我验的三件事（DOM 目标存在、`go()` 指向真实 view、
+死代码双向匹配）**没有一条检查"文件会不会真的被下载"**。
+文件在磁盘上、代码看起来完全合理，但不在模块图里。
+
+**我的检查脚本自己也是瞎的**（第二层 bug）：它只匹配 `from "..."`，
+看不见 `import "./chat.js"` 这种**裸副作用导入**。修好正则才真正验到。
+**教训：模块图可达性要同时匹配 `from "..."` 和 `import "..."`。**
+已写进 `tech_doc.md` 的「约定」。
+
+**顺手清的死代码**：`.msgs[hidden]`（msgs 不再被隐藏，hero 收起逻辑已删）；
+`id="send"` 上一轮就确认无引用、故意留作测试选择器。
+
+**端口改为 7800**：本机另一个程序也在跑 localhost 测试（7000 已被占，PID 570）。
+代码里没有硬编码端口，只改了 `tech_doc.md` 的 Run 一节。8010 已释放。
+
+**仍然验不了的**：没有浏览器，渲染、滚动、tap 手感全靠读代码推。
+导航矩阵是推演出来的，不是跑出来的。

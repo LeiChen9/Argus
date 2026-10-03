@@ -37,11 +37,42 @@ Last updated: 2026-10-03
 
 ```
 backend/
-  main.py           FastAPI app
-  static/index.html 前端页面，由 FastAPI StaticFiles 直接 serve
+  main.py                      FastAPI app
+  static/
+    index.html                 由 FastAPI StaticFiles 直接 serve
+    css/app.css                设计系统，移植自 FluentChat
+    js/app.js                  tab 切换 + 招呼语注入
+    js/greeting.js             时段×星期招呼语
+    assets/argus-anime.jpeg    NPC 源图（用户设计）
+    assets/argus-anime.webp    带 alpha，页面实际使用
 tech_doc.md         本文件
 dev_log.md          开发日志
 ```
+
+## Frontend
+
+**设计系统移植自 `../FluentChat/site/`**，不重复造轮子。`css/app.css` 268 行里
+除注释外与上游逐字节相同。回上游取改动：`diff` 一下就知道我们改过哪。
+
+底部三个 tab 是产品结构，不是实现细节：
+
+| Tab | 职责 | 状态 |
+|---|---|---|
+| **Chat** | 更新 Persona 的地方 | 首页，NPC + 招呼语已做；对话气泡/persona 面板未做 |
+| **Jobs** | 爬虫找到的求职意向下的活跃岗位聚类 | placeholder，爬虫未接 |
+| **Me** | 个人资料与设置 | placeholder |
+
+### NPC 资产：JPEG 必须转带 alpha 的 webp
+
+源图 `argus-anime.jpeg` 是 **RGB，无 alpha 通道，白底烘死在像素里**。
+页面暗色模式底色是 `#000000`，直接用会是一块发光白板。
+
+所以用**连通域泛洪**抠底：判白条件 `min(RGB) >= 246`，只保留**触边**的白色连通域。
+关键点：只抠触边区域，角色身上的白斑/高光不触边，不会被抠穿成洞。
+产出 `argus-anime.webp`（RGBA，45% 透明）。FluentChat 的 `npc-cat.webp` 同样是这个套路。
+
+**不要再用 PIL 的 `ImageDraw.floodfill`** —— 实测 thresh=8 下它会把中心像素
+`(250,237,221)` 也填掉（蓝通道差 34 本该拦住），整图被吞光。语义不可靠，用连通域。
 
 ## Run
 

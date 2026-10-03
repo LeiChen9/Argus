@@ -87,3 +87,49 @@ communication/career_preferences/strengths/weaknesses/evidence/goals），全部
 
 **依赖现状**：没有 `requirements.txt`（用户决定先不做）。依赖全靠 `echo` env裸奔，
 换机器/重建 env 会断。
+---
+
+## 2026-10-03 — Session 1 补记 3：首页移植自 FluentChat（Slice 4）
+
+**做了什么**
+
+把 FluentChat 的设计系统搬过来，只做首页（NPC + 招呼语）。
+
+- `css/app.css` — 268 行，从上游 317 行移植，**除注释外逐字节相同**
+- `js/greeting.js` — `cp` 上游文件，逐字节相同
+- `js/app.js` — 上游删掉 `initUnits` 两行（不抄 `live.js`）
+- `index.html` — 3 tab 改 chat/jobs/me，Jobs/Me 用上游现成 `.placeholder`
+- `assets/argus-anime.jpeg` — 源图，从仓库根目录移入
+- `assets/argus-anime.webp` — 生成，带 alpha
+
+**验证**
+```
+/                 200 text/html 3088B
+css/app.css       200 text/css 5806B
+js/app.js         200 text/javascript 810B
+js/greeting.js    200 text/javascript 2028B
+assets/…webp      200 image/webp 51078B  RGBA, alpha 0-255, 45% 透明
+POST /api/chat    {"reply":"收到：hi"}    ← 静态 mount 未遮蔽 API
+```
+
+**抠图方法（已写进 tech_doc，别再用错方法）**
+
+PIL 的 `ImageDraw.floodfill` **不可靠**：实测 thresh=8 下把中心像素 (250,237,221)
+也填掉，蓝通道差 34 本该拦住，整图被吞光（背景判定 100%，webp 只剩 2KB）。
+改用 scipy 连通域：判白 `min(RGB)>=246` → `ndi.label` → **只保留触边连通域**。
+结果：45.0% 抠掉，触边连通域 1 个，内部白斑 12 个**正确保留**，
+实体内部（腐蚀 4px）**破洞 0 个**。
+
+**我看不到图，怎么确认抠对了**：ASCII 打alpha 轮廓 + 明暗，肉眼读出两只耳朵、
+圆润身体、右侧尾巴、底部地面阴影 —— 与用户描述的"宝可梦小狗蹲坐"一致。
+这是代替肉眼看图的替代手段。
+
+**关于"我看不到图"这件事本身**：用户以为我看到了 NPC 并给了设计意见。
+实际上模型不支持图像输入，我全程靠 PIL 测量 + ASCII 轮廓工作。
+**这个局限必须让用户知道，不能默认自己"看过了"。**
+
+**没做**：Chat 视图的对话气泡/persona 面板（用户说先不管）、Jobs 岗位聚类卡片
+（`.unit*` 样式已从 CSS 删除，做 Jobs 时从上游再拿）、Me 页。
+`main.py` 一行没动，`/api/*` 全部保留但首页不调用。
+
+**待定**：`--accent` 仍是 FluentChat 的 `#5e5ce6` 紫，Argus 品牌色未定。

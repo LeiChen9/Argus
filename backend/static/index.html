@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Argus</title>
+<style>
+body { display: flex; gap: 2rem; margin: 2rem; font-family: system-ui, sans-serif; }
+#chat { flex: 1; display: flex; flex-direction: column; }
+#log { flex: 1; height: 55vh; overflow-y: auto; border: 1px solid #ddd; padding: 1rem; }
+.msg { margin-bottom: .5rem; white-space: pre-wrap; }
+.you { color: #2563eb; }
+.argus { color: #16a34a; }
+#persona { width: 20rem; border-left: 1px solid #ddd; padding-left: 1rem; }
+#persona h2 { font-size: 1rem; }
+.warn { color: #b45309; font-size: .8rem; }
+</style>
+</head>
+<body>
+<div id="chat">
+  <h1>Argus</h1>
+  <div id="log"></div>
+  <input id="msg" size="45" placeholder="说说你的经历…">
+  <button id="send">发送</button>
+</div>
+<div id="persona">
+  <h2>Career Persona</h2>
+  <p class="warn">UI mock — 字段抄自 README，schema 未定稿</p>
+  <pre id="pjson"></pre>
+</div>
+<script>
+const log = document.getElementById('log');
+const add = (who, text) => {
+  const div = document.createElement('div');
+  div.className = 'msg ' + who;
+  div.textContent = (who === 'you' ? '你: ' : 'Argus: ') + text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+};
+const refreshPersona = async () => {
+  const res = await fetch('/api/persona');
+  document.getElementById('pjson').textContent = JSON.stringify(await res.json(), null, 2);
+};
+document.getElementById('send').onclick = async () => {
+  const input = document.getElementById('msg');
+  const message = input.value.trim();
+  if (!message) return;
+  add('you', message);
+  input.value = '';
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message })
+  });
+  add('argus', (await res.json()).reply);
+  refreshPersona();
+};
+refreshPersona();
+</script>
+</body>
+</html>

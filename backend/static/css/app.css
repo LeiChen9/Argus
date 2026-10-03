@@ -5,24 +5,33 @@
    其余逐字节一致
    ============================================================ */
 
-/* ── Design tokens ── */
+/* ── Design tokens ──
+   暖色体系。三个角色必须分开，不能合并：
+   --accent     图标/小字。亮底要深(#8B6F47 4.55:1)、暗底要浅(#D2B48C 10.65:1)，
+                方向相反，所以 accent 本身就分亮暗两档。
+   --bubble-me  用户气泡底 = 奶油。配深墨字 10.17:1（不是白字）。
+   --on-accent  压在 --accent 上的文字（send 按钮），亮色模式是白字 4.71:1。
+                和 --on-bubble 是两回事，不能共用一个 token。 */
 :root {
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
           "PingFang SC", "Helvetica Neue", Arial, sans-serif;
 
   --bg: #fbfbfd;
   --ink: #1c1c1e;
-  --ink-2: rgba(60, 60, 67, 0.60);
-  --ink-3: rgba(60, 60, 67, 0.30);
-  --hairline: rgba(60, 60, 67, 0.16);
+  --ink-2: rgba(74, 62, 50, 0.62);
+  --ink-3: rgba(74, 62, 50, 0.32);
+  --hairline: rgba(74, 62, 50, 0.16);
 
-  --accent: #5e5ce6;
-  --glow: rgba(94, 92, 230, 0.14);
-  --bar-bg: rgba(249, 249, 251, 0.72);
+  --accent: #8b6f47;
+  --glow: rgba(139, 111, 71, 0.16);
+  --bar-bg: rgba(250, 247, 242, 0.72);
 
-  /* 气泡：--bubble-me 必须比 --accent 更深，暗色模式下白字才够对比度 */
-  --bubble-me: #5e5ce6;
+  --bubble-me: #f0e0c8;
+  --on-bubble: #3a2e22;
   --on-accent: #ffffff;
+
+  /* 亮底用投影托轮廓，暗底用辉光。两模式只换这一个 token。 */
+  --npc-shadow: 0 14px 30px rgba(58, 46, 34, 0.14);
 
   --spring: cubic-bezier(0.32, 0.72, 0, 1);
   --soft: cubic-bezier(0.4, 0, 0.2, 1);
@@ -31,18 +40,23 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #000000;
+    --bg: #14110d;
     --ink: #f5f5f7;
-    --ink-2: rgba(235, 235, 245, 0.60);
-    --ink-3: rgba(235, 235, 245, 0.30);
-    --hairline: rgba(235, 235, 245, 0.18);
+    --ink-2: rgba(233, 224, 210, 0.62);
+    --ink-3: rgba(233, 224, 210, 0.34);
+    --hairline: rgba(233, 224, 210, 0.18);
 
-    --accent: #7d7aff;
-    --glow: rgba(125, 122, 255, 0.20);
-    --bar-bg: rgba(22, 22, 24, 0.72);
+    /* 暗底要浅，奶油 #D2B48C 压黑 10.65:1 */
+    --accent: #d2b48c;
+    --glow: rgba(210, 180, 140, 0.18);
+    --bar-bg: rgba(32, 27, 22, 0.72);
 
-    /* 白字在 --accent #7d7aff 上只有 3.44:1，不过 AA。压深到 5.97:1 */
-    --bubble-me: #514ee0;
+    /* 暗色下奶油被 NPC 占住了，气泡改深棕、字用奶油 */
+    --bubble-me: #4a3b2e;
+    --on-bubble: #f0e0c8;
+    --on-accent: #2a2118;
+
+    --npc-shadow: 0 0 38px rgba(210, 180, 140, 0.34);
   }
 }
 
@@ -147,7 +161,7 @@ button { font: inherit; color: inherit; }
   user-select: none;
   /* 奶油色身体压在近白底上，只差几个色阶。
      靠投影把轮廓托出来，不然糊在背景里。 */
-  filter: drop-shadow(0 14px 30px rgba(30, 30, 50, 0.14));
+  filter: drop-shadow(var(--npc-shadow));
   animation: breathe 4.6s var(--soft) infinite;
 }
 
@@ -159,11 +173,6 @@ button { font: inherit; color: inherit; }
 @keyframes breathe {
   0%, 100% { transform: scale(1) translateY(0); }
   50%      { transform: scale(1.025) translateY(-3px); }
-}
-
-/* 深色底下奶油色身体本身就亮，投影没意义，换成辉光 */
-@media (prefers-color-scheme: dark) {
-  .npc { filter: drop-shadow(0 0 38px rgba(125, 122, 255, 0.34)); }
 }
 
 /* ── Greeting ── */
@@ -392,7 +401,7 @@ button { font: inherit; color: inherit; }
 .msg--me .bubble {
   background: var(--bubble-me);
   border-bottom-right-radius: 5px;
-  color: var(--on-accent);
+  color: var(--on-bubble);
 }
 
 @keyframes bubbleIn {

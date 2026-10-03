@@ -1,0 +1,266 @@
+{
+  "$defs": {
+    "Capability": {
+      "description": "一项能力。name 是名字，experience_ids 指到哪些经历证明了它。",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "experience_ids": {
+          "default": [],
+          "description": "引用 Experience.id",
+          "items": {
+            "type": "string"
+          },
+          "title": "Experience Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "Capability",
+      "type": "object"
+    },
+    "Experience": {
+      "description": "一段经历。id 是锚点，text 全自由文本：时间、公司、做了什么、结果全写里面。",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "text": {
+          "default": "",
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "Experience",
+      "type": "object"
+    },
+    "Gap": {
+      "description": "一个差距。全自由文本：target 想去哪，capability 缺什么，note 差在哪、为什么。",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "description": "引用 Target.id",
+          "title": "Target",
+          "type": "string"
+        },
+        "capability": {
+          "description": "引用 Capability.id",
+          "title": "Capability",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "capability"
+      ],
+      "title": "Gap",
+      "type": "object"
+    },
+    "Intervention": {
+      "description": "一个具体行动。action 做什么，note 为什么做、做完有什么变化。",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "action": {
+          "title": "Action",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        },
+        "serves_gaps": {
+          "default": [],
+          "description": "引用 Gap.id，可跨 target",
+          "items": {
+            "type": "string"
+          },
+          "title": "Serves Gaps",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "action"
+      ],
+      "title": "Intervention",
+      "type": "object"
+    },
+    "Preferences": {
+      "properties": {
+        "location": {
+          "default": "",
+          "title": "Location",
+          "type": "string"
+        },
+        "expected": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "期望年薪，单位千元",
+          "title": "Expected"
+        },
+        "notes": {
+          "default": "",
+          "description": "只放用户手写的自由文本。LLM 不得写入本字段。",
+          "title": "Notes",
+          "type": "string"
+        }
+      },
+      "title": "Preferences",
+      "type": "object"
+    },
+    "Profile": {
+      "properties": {
+        "current_roles": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Current Roles",
+          "type": "array"
+        },
+        "current_state": {
+          "default": "",
+          "title": "Current State",
+          "type": "string"
+        },
+        "preferences": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/Preferences"
+            }
+          ],
+          "default": {
+            "location": "",
+            "expected": null,
+            "notes": ""
+          }
+        }
+      },
+      "title": "Profile",
+      "type": "object"
+    },
+    "Target": {
+      "description": "一个想去的方向。数组顺序表达主次，排第一即主目标。只留 role + note。",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "role"
+      ],
+      "title": "Target",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": 4,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "profile": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Profile"
+        }
+      ],
+      "default": {
+        "current_roles": [],
+        "current_state": "",
+        "preferences": {
+          "expected": null,
+          "location": "",
+          "notes": ""
+        }
+      }
+    },
+    "experiences": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Experience"
+      },
+      "title": "Experiences",
+      "type": "array"
+    },
+    "capabilities": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Capability"
+      },
+      "title": "Capabilities",
+      "type": "array"
+    },
+    "targets": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Target"
+      },
+      "title": "Targets",
+      "type": "array"
+    },
+    "gaps": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Gap"
+      },
+      "title": "Gaps",
+      "type": "array"
+    },
+    "interventions": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Intervention"
+      },
+      "title": "Interventions",
+      "type": "array"
+    }
+  },
+  "title": "Persona",
+  "type": "object"
+}

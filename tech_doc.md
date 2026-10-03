@@ -150,3 +150,58 @@ uvicorn main:app --app-dir backend --port 7800
 - 接哪个 LLM 做 Persona 抽取 / Gap Analysis，以及是否流式
 - 前端在 Phase 1 之后是否升级为 React + Vite（引入构建链）
 - 前端形态（对话流 / Persona 面板 / Gap 列表）如何对应 README 的 MVP 五个模块
+
+
+## Persona Schema（2026-10-03 定稿）
+
+**唯一来源：`backend/persona_model.py`**（Pydantic 2.7.0，随 FastAPI 已装，零新依赖）。
+`persona.md` 与 `backend/persona_schema.json` 都是**导出产物，勿手改**。
+
+```bash
+source activate echo && python -m backend.tools.export_persona_schema   # 重新生成
+source activate echo && python -m backend.tests.run_persona_checks      # 46 项约束检查
+```
+
+### 五条定稿决定
+
+1. **gaps 持久化 + 快照语义。** `current_level`/`target_level` 冗余存储
+   评估当时的值，**不从 `capabilities` 反查**——反查会让 gap 状态机依赖的值被偷改。
+   新鲜度看 `Gap.stale()`（capability 档案比 `evaluated_at` 新即过期）。
+2. **多目标。** `targets[]`，gap 挂在 target 下并按 target 分片。
+3. **interventions 顶层去重。** 完成状态按 `(干预, gap)` 逐对记在
+   `gap_results`，**不能**在 intervention 上放单个完成标志——两个 target 对
+   同一能力的 `target_level` 可能不同，一次「学 SQL」可能关掉 PM 的 gap
+   而关不掉 DA 的。
+4. **LLM 产出的 gap 初始为 `proposed`**，用户批准才转 `open`。
+   对应 README 的 Human in the Loop。
+5. **`level` 统一 1-5 带锚点**（`LEVEL_ANCHORS`）。gaps 的 current/target 与
+   `capabilities[].level` 同尺度，否则差值无意义。
+
+### 两个承重约束
+
+- **`capabilities[].id` 是承重外键**，`expression` 和 `gaps` 都引用它。
+  必须用 `capability_slug()` 派生稳定 slug，**不能用 UUID**——改 id 即悬空。
+- **`dangling_refs()` 不自动触发**。它是显式调用方法，Pydantic 不会拦。
+  增量写入时允许暂时悬空是合理的；B 片落库前必须显式检查一次。
+
+### 相对原草稿的改动
+
+| 原草稿 | 改动 | 原因 |
+|---|---|---|
+| `gaps` 在 persona 下扁平 | 移到 `targets[].gaps` | 多目标需分片 |
+| `interventions` 在 target 下 | 提到顶层 + `serves_gaps` | 跨目标去重 |
+| 无 gap 状态 | `proposed/open/resolved/dismissed` | README 358 行避免凭印象贴标签 |
+| `development.goals/- ...` | 删除 | 与 `targets[].role` 语义重叠且未定义 |
+| `development.progress` | 删除 | 与 intervention 的关系无 FK；证据回流走 `new_evidence` |
+| `level` / `confidence` 裸标量 | 1-5 带锚点 + 三档枚举 | 裸数字对 LLM 无意义 |
+| 无时间戳 | `occurred_at` / `evaluated_at` / `updated_at` | README 385 行"有没有变好"在数据上无法回答 |
+| `strengths`/`weaknesses` 缺失 | 删除 | 可从 `gaps.importance` 推导，重复存储必然漂移 |
+| `compensation` 单标量 | `{current, expected}` | 谈判需要两个值 |
+| `note` 自由文本 | `preferences.notes` + LLM 禁写标注 | 自由文本是 schema 退化起点 |
+| 无 Communication | `expression[]` 独立结构 | 能力≠表达，README 144 行的 gap 类型塌缩了 |
+
+### 已知取舍
+
+- `dangling_refs()` 只报不抛：允许增量构建中途悬空。
+- `category` 与 `category_raw` 并存，等真实 JD 数据到位后再定受控词表。
+- 存储（B 片）用单行 JSON 列，不建正规表。等多目标跑起来有真实数据再做迁移依据。

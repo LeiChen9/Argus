@@ -273,3 +273,128 @@ source activate echo && nohup uvicorn main:app --app-dir backend --port 7800 \
 ```
 
 `disown` 后要**另开一次工具调用**复查进程还在，才算真的起来了。
+
+---
+
+## 2026-10-03 — Session 1 补记 7：Persona schema 定稿（A 片）
+
+`persona.md` 原本是用户草拟的 52 行 YAML 草图。评审后发现三个结构性问题，
+逐一确认后定稿。模型落在 `backend/persona_model.py`，`persona.md` 和
+`backend/persona_schema.json` 都是导出产物。
+
+**评审发现的三个真问题：**
+
+1. **gaps 和 interventions 不该住在 persona 里。** 用户原本想移出去，
+   但明确要求「持久化、短期内固定、LLM 评估通过后不再是 gap」——
+   这是**快照语义**。快照下 `current_level` **必须冗余存储**，
+   从 capabilities 反查会让 gap 状态机依赖的值被偷改。
+   → 修正了最初「不该存在」的意见，保留但改写。
+2. **多目标无处安放。** `gaps` 是 persona 下的扁平列表，`capability` 隐式外键
+   指向能力而非目标。用户会同时考虑 DA 和 PM，两套 gaps 没有地方放。
+   → 引入 `targets[]`，gap 按 target 分片。
+3. **5 个 README 组件没落点**：Knowledge / Domain Expertise / Communication /
+   Strengths / Weaknesses。其中 Communication 最关键——
+   README 144 行定义它为「能力存在，但无法在简历、沟通或面试中有效表达」，
+   是唯一把能力和表达分离的 gap 类型，而 `level` 是单标量，塌缩了。
+   → 新增 `expression[]` 独立结构（capability × channel × level）。
+
+**几个次要但会咬人的地方：**
+
+- 全 schema 无时间戳。README 385 行要回答「Am I getting better?」，
+  没有时间就无法回答。→ 补 `occurred_at` / `evaluated_at` / `updated_at`。
+- `level` 有三套量纲（资历/熟练度/gap端点）共用一个名字。→ 统一 1-5 带锚点。
+- `gaps.importance` / `estimated_effort` 自由文本无法排序。→ 改枚举。
+- `development.progress` 与 intervention 无 FK 关联。→ 删除，证据回流走
+  `intervention.new_evidence`（README 350 行那条箭头）。
+- `preferences.note` 是自由文本垃圾桶。→ 改 `notes` 并标注「LLM 禁写」。
+
+**踩坑：**
+
+- **`StrEnum` 在 Python 3.10 不存在**（3.11+ 才有）。改用 `(str, Enum)`，
+  Pydantic 2 会正常取 `.value`。
+- **相对导入在 `--app-dir backend` 下炸**。`--app-dir` 把 `backend/` 变成
+  sys.path 起点，此时 `backend` 不是包，`from .persona_model` 报
+  `attempted relative import with no known parent package`。
+  → `main.py` 用 `from persona_model import Persona`（绝对），
+  而工具脚本和测试从仓库根跑，用 `from backend.persona_model import`。
+  两套并存是因为 uvicorn 的启动方式和脚本不同，不是没统一。
+- **第一版测试全是假失败**：我写的 `check()` 把「抛 ValidationError」
+  记成 FAIL，但那些 case 本来就该抛。测试自身写反了，不是模型问题。
+  重写后 46 项全过。
+- **pytest 没装**，且用户明确要求不动依赖。写了 `run_persona_checks.py`
+  做等价验证，等 pytest 装上以 `test_persona_model.py` 为准。
+
+**验不了的：** `dangling_refs()` 只报不抛（Pydantic 不自动拦），
+这条取舍靠代码约定保证，B 片落库前必须显式检查。schema 的实际可用性
+要等真实 JD 数据和 LLM 抽取跑一遍才知道。
+
+**验证：** 46 项约束检查全过；导出幂等；README 10 条设计原则逐一有落点；
+`/api/persona` 返回 200 且结构与模型一致；旧的 `PERSONA_MOCK`（11 个
+与新结构冲突的字段）已删除。
+
+
+**⚠️ 遗留未决（不是本次改动）：** `.gitignore` 第 221 行多了一条 `assets/`，
+非本次任务产生，来源未确认。它会忽略整个 `assets/` 目录——
+现有 `argus-anime.jpeg` / `.webp` 因已被跟踪而幸免，但**任何新资产都会被静默吞掉**。
+已向用户提出，建议撤掉；等用户确认，勿擅自提交。
+
+---
+
+## 交接：当前状态（补记 7 结束时）
+
+### Git
+
+`main` 与 `origin/main` 同步在 `367af2d`。**A 片全部未提交**，工作区：
+
+```
+ M .gitignore          ← 非本次改动，见上，建议撤
+ M backend/main.py     ← 删 PERSONA_MOCK，改用 Persona
+ M dev_log.md
+ M tech_doc.md
+?? backend/persona_model.py
+?? backend/persona_schema.json
+?? backend/tests/
+?? backend/tools/
+?? persona.md
+```
+
+**A 片尚未 commit，等用户先看 persona.md。**
+
+### 服务
+
+`uvicorn main:app --app-dir backend --port 7800`，PID 随会话变化。
+起法必须带 `disown`（见补记 6）：
+
+```bash
+source activate echo && nohup uvicorn main:app --app-dir backend --port 7800 \
+  > /tmp/argus-uvicorn.log 2>&1 & disown
+```
+
+**验证 200**：`/`、`/api/persona`、`/api/chat`。注意 `/api/persona`
+现在返回真实 Persona 结构（`schema_version: 1`，空档案），
+不再是旧的 11 字段 `PERSONA_MOCK`。
+
+### 跑检查
+
+```bash
+source activate echo && python -m backend.tests.run_persona_checks   # 46 项，应全过
+source activate echo && python -m backend.tools.export_persona_schema  # 幂等，git diff 应为空
+```
+
+pytest 未装（用户要求不动依赖），`run_persona_checks.py` 是等价过渡实现。
+pytest 装上后以 `backend/tests/test_persona_model.py` 为准。
+
+### 下次开工前必须知道的三件事
+
+1. **A 片未提交**，且 `.gitignore` 那行 `assets/` 待用户裁决。
+2. **`dangling_refs()` 只报不抛。** Pydantic 不自动校验跨对象引用。
+   B 片落库前必须显式调一次，否则悬空引用会静默进库。
+3. **`capabilities[].id` 是承重外键**，改 id 会让 `expression` 和 `gaps`
+   全部悬空。必须走 `capability_slug()` 派生，禁用 UUID。
+
+### 下一片：B（存储）
+
+SQLite 单行 JSON 列 + `schema_version`。落库时按上面第 2 条显式检查
+`dangling_refs()`。零新依赖（`sqlite3` 是标准库）。
+
+未批准，不要自行开始。

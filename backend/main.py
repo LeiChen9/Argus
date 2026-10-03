@@ -4,21 +4,9 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-app = FastAPI(title="Argus")
+from persona_model import Persona
 
-PERSONA_MOCK = {
-    "experience": [],
-    "skills": [],
-    "knowledge": [],
-    "projects": [],
-    "domain_expertise": [],
-    "communication": [],
-    "career_preferences": [],
-    "strengths": [],
-    "weaknesses": [],
-    "evidence": [],
-    "goals": [],
-}
+app = FastAPI(title="Argus")
 
 
 class ChatRequest(BaseModel):
@@ -32,7 +20,7 @@ def chat(body: ChatRequest) -> dict:
 
 @app.get("/api/persona")
 def persona() -> dict:
-    return PERSONA_MOCK
+    return Persona().model_dump(mode="json")
 
 
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")

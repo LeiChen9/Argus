@@ -76,6 +76,9 @@ STORE_PATH = Path(__file__).resolve().parent / "persona.json"
 MAX_BYTES = 200 * 1024
 ALLOWED_SUFFIX = {".md", ".txt"}
 
+# 聊天里聊出来的求职意向，不是简历抽取的产物，故不进 RESUME_TO_PERSONA。
+TARGET_KEYS = ("target", "target_base", "target_salary")
+
 _persona: dict | None = None
 
 
@@ -89,6 +92,23 @@ def get_persona() -> dict:
         return _persona
     _persona = {}
     return _persona
+
+
+def save_targets(
+    target: list[str],
+    target_base: str,
+    target_salary: str,
+) -> dict:
+    """只更新求职意向三个字段，其余键（简历抽取结果）原样保留。
+
+    单独开这个口而不是复用 save_persona：上传简历是整体覆盖，
+    若聊天里聊出的意向被一并抹掉，用户刚告诉我们的信息就白给了。
+    """
+    data = dict(get_persona())
+    data["target"] = target
+    data["target_base"] = target_base
+    data["target_salary"] = target_salary
+    return save_persona(data)
 
 
 def save_persona(data: dict) -> dict:
@@ -139,5 +159,14 @@ def parse_resume_llm(text: str) -> dict:
 
 
 def init_persona_from_text(text: str) -> dict:
-    """从简历文本调 LLM 建 Persona 并落盘。失败抛错，不降级。"""
-    return save_persona(parse_resume_llm(text))
+    """从简历文本调 LLM 建 Persona 并落盘。失败抛错，不降级。
+
+    聊出来的求职意向不丢：简历抽取只给简历里有的字段，
+    target / target_base / target_salary 沿用聊天里已存的。
+    """
+    data = parse_resume_llm(text)
+    current = get_persona()
+    for key in TARGET_KEYS:
+        if key in current:
+            data[key] = current[key]
+    return save_persona(data)

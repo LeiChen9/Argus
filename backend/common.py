@@ -1,6 +1,7 @@
 """底层工具：只放 IO 与.env 读取，不含任何业务。
 
 - read_env_key: 从项目根 .env 读 key
+- llm_client: 走 Gemini 的 OpenAI 兼容端点，chat 和 persona 共用
 - load_json_file / save_json_file: persona.json 落盘底层
 - clean_llm_json: 去 markdown 代码块后解析 JSON
 """
@@ -8,7 +9,13 @@
 from __future__ import annotations
 
 import json
+from functools import cache
 from pathlib import Path
+
+from openai import OpenAI
+
+GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 
 def project_root() -> Path:
@@ -23,6 +30,15 @@ def read_env_key(name: str) -> str:
         if line.startswith(name + "="):
             return line.split("=", 1)[1].strip().strip("'").strip('"')
     raise RuntimeError(f".env 缺少 {name}")
+
+
+@cache
+def llm_client() -> OpenAI:
+    """Gemini 的 OpenAI 兼容端点。不装 google-genai，SDK 复用已有的 openai。"""
+    return OpenAI(
+        api_key=read_env_key("gemini_apiKey"),
+        base_url=GEMINI_BASE_URL,
+    )
 
 
 def load_json_file(path: Path) -> dict:

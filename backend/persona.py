@@ -17,9 +17,14 @@ import time
 from pathlib import Path
 
 from fastapi import UploadFile
-from openai import OpenAI
 
-from common import clean_llm_json, load_json_file, read_env_key, save_json_file
+from common import (
+    GEMINI_MODEL,
+    clean_llm_json,
+    llm_client,
+    load_json_file,
+    save_json_file,
+)
 
 logger = logging.getLogger("argus.persona")
 
@@ -106,19 +111,15 @@ async def read_upload(file: UploadFile) -> str:
 
 
 def parse_resume_llm(text: str) -> dict:
-    """调智谱抽取。失败抛错（由 chat.py 转 502），不降级。返回 LLM 给的原样 JSON。"""
+    """调 Gemini 抽取。失败抛错（由 chat.py 转 502），不降级。返回 LLM 给的原样 JSON。"""
     logger.info("parse_resume_llm: start, resume_len=%d", len(text))
     body = text.strip()
     if not body:
         logger.info("parse_resume_llm: empty resume, return {}")
         return {}
-    client = OpenAI(
-        api_key=read_env_key("zhipu_realtime_apiKey"),
-        base_url="https://open.bigmodel.cn/api/paas/v4/",
-    )
     t0 = time.perf_counter()
-    resp = client.chat.completions.create(
-        model="glm-4.7-flash",
+    resp = llm_client().chat.completions.create(
+        model=GEMINI_MODEL,
         messages=[{"role": "user", "content": build_resume_prompt(body)}],
         temperature=0.1,
     )

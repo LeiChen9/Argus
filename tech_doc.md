@@ -152,15 +152,14 @@ uvicorn main:app --app-dir backend --port 7800
 - 前端形态（对话流 / Persona 面板 / Gap 列表）如何对应 README 的 MVP 五个模块
 
 
-## Persona Schema（2026-10-03 定稿）
+## Persona Schema（2026-10-03 定稿，**2026-10-04 已作废**）
 
-**唯一来源：`backend/persona_model.py`**（Pydantic 2.7.0，随 FastAPI 已装，零新依赖）。
-`persona.md` 与 `backend/persona_schema.json` 都是**导出产物，勿手改**。
-
-```bash
-source activate echo && python -m backend.tools.export_persona_schema   # 重新生成
-source activate echo && python -m backend.tests.run_persona_checks      # 46 项约束检查
-```
+> 以下设计讨论保留作历史记录。当时的落地物是 `backend/persona_model.py`（Pydantic）
+> 与其导出产物 `persona.md` / `backend/persona_schema.json`，现已全部删除。
+> Persona 内部不再有数据模型，就是一个 dict；字段约定的唯一来源是
+> `backend/persona.py` 里的 `RESUME_TO_PERSONA` prompt。
+> 导出脚本 `backend.tools.export_persona_schema` 与约束检查
+> `backend.tests.run_persona_checks` / `test_persona_model.py` 一并删除，无替代。
 
 ### 五条定稿决定
 

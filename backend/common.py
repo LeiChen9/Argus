@@ -1,0 +1,45 @@
+"""底层工具：只放 IO 与.env 读取，不含任何业务。
+
+- read_env_key: 从项目根 .env 读 key
+- load_json_file / save_json_file: persona.json 落盘底层
+- clean_llm_json: 去 markdown 代码块后解析 JSON
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+
+def project_root() -> Path:
+    """backend/ 的父目录，即项目根（.env 所在）。"""
+    return Path(__file__).resolve().parents[1]
+
+
+def read_env_key(name: str) -> str:
+    """从项目根 .env 读 key。key 不入库（.env 已 gitignore）。"""
+    for line in (project_root() / ".env").read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith(name + "="):
+            return line.split("=", 1)[1].strip().strip("'").strip('"')
+    raise RuntimeError(f".env 缺少 {name}")
+
+
+def load_json_file(path: Path) -> dict:
+    """读 JSON 文件。不存在抛 FileNotFoundError，由调用方决定回退。"""
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_json_file(path: Path, payload: str) -> None:
+    """写文本到文件。调用方负责序列化，本函数只做 IO。"""
+    path.write_text(payload + "\n", encoding="utf-8")
+
+
+def clean_llm_json(raw: str) -> dict:
+    """去 markdown 代码块后解析 JSON。LLM 偶发包 ```json 块。"""
+    body = raw.strip()
+    if body.startswith("```"):
+        body = body.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        if body.startswith("json"):
+            body = body[4:].strip()
+    return json.loads(body)

@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Argus: persona runtime store (memory singleton spillover, gitignored)
+backend/persona.json
+
+# Argus: nohup 起的 uvicorn 落在这里，是日志不是源码
+nohup.out

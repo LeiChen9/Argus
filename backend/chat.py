@@ -10,7 +10,7 @@ import logging
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from common import GEMINI_MODEL, llm_client
+from common import GEMINI_MODEL, llm_client, render_markdown
 from persona import get_persona, init_persona_from_text, read_upload
 
 logger = logging.getLogger("argus.chat")
@@ -19,11 +19,11 @@ router = APIRouter()
 
 SYSTEM_PROMPT = """你是 Argus，一个职业发展助手。
 
-你通过持续对话理解用户的职业画像：做过什么、真正擅长什么、想要做什么、有哪些能力有
-真实证据、希望往哪个方向走。回答要基于用户提供的具体经历，不要泛泛而谈
-职业建议。用户的简历信息如果存在，已经放在下方 JSON 里。
+你的目标是充分了解用户，为他/她找到心仪合适的工作。
+通过持续对话理解用户经历，用户求职的目标，期望薪资范围，以及期望工作城市。
+用户的简历信息如果存在，已经放在下方 JSON 里。
 
-不确定的地方就说不确定，不要编造用户的经历、职位或数字。"""
+每次只输出一两句话。不要长篇大论。"""
 
 _history: list[dict] = []
 
@@ -63,7 +63,7 @@ def chat(body: ChatRequest) -> dict:
         raise HTTPException(status_code=502, detail=f"对话失败：{e}")
     reply = resp.choices[0].message.content or ""
     _history.append({"role": "assistant", "content": reply})
-    return {"reply": reply}
+    return {"reply": render_markdown(reply)}
 
 
 @router.post("/api/persona/init")

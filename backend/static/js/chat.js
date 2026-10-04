@@ -7,6 +7,13 @@ const file = document.getElementById("file");
 const attach = document.getElementById("attach");
 const chip = document.getElementById("chip");
 
+// 返回 node：showTyping() 靠它拿回挂载后的节点，之后才能 pending.remove()
+const show = (node) => {
+  msgs.appendChild(node);
+  msgs.scrollTop = msgs.scrollHeight;
+  return node;
+};
+
 const row = (who, text, bubble) => {
   const el = document.createElement("div");
   el.className = `msg msg--${who}`;
@@ -24,11 +31,14 @@ const row = (who, text, bubble) => {
   return el;
 };
 
-// 返回 node：showTyping() 靠它拿回挂载后的节点，之后才能 pending.remove()
-const show = (node) => {
-  msgs.appendChild(node);
-  msgs.scrollTop = msgs.scrollHeight;
-  return node;
+// Argus 的回复是后端渲染好的 markdown HTML。div 而非 p：回复里有 h3/ul/hr
+// 等块级元素，放进 p 会被浏览器拆散、DOM 结构坏掉。
+// 只给这个函数用 innerHTML —— 用户自己的消息和错误文案仍走 row() 的 textContent。
+const showReply = (html) => {
+  const bubble = document.createElement("div");
+  bubble.className = "bubble md";
+  bubble.innerHTML = html;
+  show(row("them", null, bubble));
 };
 
 // 还没上传过简历时，Argus 先开口。放在页面加载时做：chat 视图此刻是隐藏的，
@@ -96,7 +106,7 @@ form.addEventListener("submit", async (event) => {
       show(row("them", `我说不了话：${data.detail || res.status}`));
       return;
     }
-    show(row("them", data.reply));
+    showReply(data.reply);
   } catch (err) {
     show(row("them", `我说不了话：${err.message}`));
   } finally {

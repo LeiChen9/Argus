@@ -12,10 +12,14 @@ import json
 from functools import cache
 from pathlib import Path
 
+from markdown_it import MarkdownIt
 from openai import OpenAI
 
 GEMINI_MODEL = "gemini-3.5-flash"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+_MD = MarkdownIt("commonmark", {"html": False, "linkify": True})
+_MD.enable("strikethrough")
 
 
 def project_root() -> Path:
@@ -49,6 +53,15 @@ def load_json_file(path: Path) -> dict:
 def save_json_file(path: Path, payload: str) -> None:
     """写文本到文件。调用方负责序列化，本函数只做 IO。"""
     path.write_text(payload + "\n", encoding="utf-8")
+
+
+def render_markdown(text: str) -> str:
+    """LLM 回复里的 markdown 转 HTML，供前端气泡直接插。
+
+    html=False：裸 <script>/<b> 一律转义成文本。LLM 会照抄简历里的文字，
+    简历里若带标签不能变成可执行 HTML。链接仍走 markdown-it 的 URL 校验。
+    """
+    return _MD.render(text)
 
 
 def clean_llm_json(raw: str) -> dict:

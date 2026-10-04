@@ -374,6 +374,78 @@ button { font: inherit; color: inherit; }
   color: var(--ink);
 }
 
+/* ── Markdown 回复 ──
+   .bubble 的 white-space: pre-wrap 是给纯文本气泡留换行的；HTML 元素自带
+   间距，再用 pre-wrap 会在段落和 hr 之间多出空白行，所以这里改回 normal。 */
+.bubble.md {
+  white-space: normal;
+}
+.bubble.md > :first-child { margin-top: 0; }
+.bubble.md > :last-child { margin-bottom: 0; }
+
+.bubble.md h1,
+.bubble.md h2,
+.bubble.md h3,
+.bubble.md h4 {
+  margin: 14px 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.bubble.md h1 { font-size: 18px; }
+.bubble.md h2 { font-size: 17px; }
+
+.bubble.md p { margin: 0 0 8px; }
+
+.bubble.md ul,
+.bubble.md ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+.bubble.md li { margin: 2px 0; }
+.bubble.md ul ul,
+.bubble.md ul ol,
+.bubble.md ol ol { margin: 2px 0; }
+
+.bubble.md strong { font-weight: 600; }
+
+.bubble.md code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--glow);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+}
+
+.bubble.md pre {
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border-radius: 10px;
+  background: var(--glow);
+}
+.bubble.md pre code {
+  padding: 0;
+  background: none;
+  font-size: 13px;
+  white-space: pre;
+}
+
+.bubble.md blockquote {
+  margin: 0 0 8px;
+  padding-left: 12px;
+  border-left: 2px solid var(--hairline);
+  color: var(--ink-2);
+}
+
+.bubble.md hr {
+  margin: 12px 0;
+  border: 0;
+  border-top: 0.5px solid var(--hairline);
+}
+
+.bubble.md a { color: var(--accent); }
+
 .msg--me .bubble {
   background: var(--bubble-me);
   border-bottom-right-radius: 5px;

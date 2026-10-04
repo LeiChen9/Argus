@@ -7,7 +7,7 @@ const file = document.getElementById("file");
 const attach = document.getElementById("attach");
 const chip = document.getElementById("chip");
 
-const row = (who, text) => {
+const row = (who, text, bubble) => {
   const el = document.createElement("div");
   el.className = `msg msg--${who}`;
   if (who === "them") {
@@ -17,16 +17,36 @@ const row = (who, text) => {
     avatar.alt = "";
     el.appendChild(avatar);
   }
-  const bubble = document.createElement("p");
-  bubble.className = "bubble";
-  bubble.textContent = text;
+  bubble ??= document.createElement("p");
+  bubble.classList.add("bubble");
+  if (text !== null) bubble.textContent = text;
   el.appendChild(bubble);
   return el;
 };
 
+// 返回 node：showTyping() 靠它拿回挂载后的节点，之后才能 pending.remove()
 const show = (node) => {
   msgs.appendChild(node);
   msgs.scrollTop = msgs.scrollHeight;
+  return node;
+};
+
+// 还没上传过简历时，Argus 先开口。放在页面加载时做：chat 视图此刻是隐藏的，
+// 用户切过去时这句话已经在那里了。
+const NO_RESUME_GREETING = "你好呀。还没有你的简历，方便的话传一份给我？我想先认识你一下。";
+
+fetch("/api/persona")
+  .then((res) => res.json())
+  .then((data) => {
+    if (Object.keys(data).length === 0) show(row("them", NO_RESUME_GREETING));
+  });
+
+// 等待 LLM 时 Argus 先"打字"：一个 them 气泡，里面三点跳。
+const showTyping = () => {
+  const bubble = document.createElement("p");
+  bubble.className = "bubble typing";
+  bubble.append(...[0, 1, 2].map(() => document.createElement("i")));
+  return show(row("them", null, bubble));
 };
 
 document.getElementById("chat-back").addEventListener("click", () => go("home"));
@@ -40,31 +60,48 @@ form.addEventListener("submit", async (event) => {
     show(row("me", `上传简历：${picked.name}`));
     file.value = "";
     chip.hidden = true;
-    show(row("them", "简历解析中…"));
-    const form = new FormData();
-    form.append("file", picked);
-    const res = await fetch("/api/persona/init", { method: "POST", body: form });
-    const data = await res.json();
-    msgs.lastChild.remove();
-    if (!res.ok) {
-      show(row("them", `解析失败：${data.detail || res.status}`));
-      return;
+    const pending = showTyping();
+    const body = new FormData();
+    body.append("file", picked);
+    try {
+      const res = await fetch("/api/persona/init", { method: "POST", body });
+      const data = await res.json();
+      if (!res.ok) {
+        show(row("them", `解析失败：${data.detail || res.status}`));
+        return;
+      }
+      const n_work = data.work_history?.length ?? 0;
+      const n_skill = data.skills?.length ?? 0;
+      const n_edu = data.education?.length ?? 0;
+      show(row("them", `解析完成：${n_work} 段经历，${n_skill} 项技能，${n_edu} 段教育`));
+    } catch (err) {
+      show(row("them", `解析失败：${err.message}`));
+    } finally {
+      pending.remove();
     }
-    const n_work = data.work_history?.length ?? 0;
-    const n_skill = data.skills?.length ?? 0;
-    const n_edu = data.education?.length ?? 0;
-    show(row("them", `解析完成：${n_work} 段经历，${n_skill} 项技能，${n_edu} 段教育`));
     return;
   }
   if (!message) return;
   show(row("me", message));
   input.value = "";
-  const res = await fetch("/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
-  });
-  show(row("them", (await res.json()).reply));
+  const pending = showTyping();
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      show(row("them", `我说不了话：${data.detail || res.status}`));
+      return;
+    }
+    show(row("them", data.reply));
+  } catch (err) {
+    show(row("them", `我说不了话：${err.message}`));
+  } finally {
+    pending.remove();
+  }
 });
 
 attach.addEventListener("click", () => file.click());

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from common import GEMINI_MODEL, llm_client, render_markdown
 from persona import get_persona, init_persona_from_text, read_upload, save_targets
+from crawler import fetch_boss_html, parse_jobs
 
 logger = logging.getLogger("argus.chat")
 
@@ -28,7 +29,10 @@ SYSTEM_PROMPT = """你是 Argus，一个职业发展助手。
 
 当用户明确了求职意向（包括职位列表、意向城市、期望薪资），你必须调用 update_persona 工具将其保存。
 - target 是职位列表，按意向度从高到低排列。
-- 三项都明确后才能调用。"""
+- 三项都明确后才能调用。
+
+当用户要求在 Boss 直聘上搜索岗位时，使用 search_boss_jobs 工具。
+- 例如：“帮我搜一下上海的数据分析岗位” -> 调用 search_boss_jobs(keyword="上海 数据分析")。"""
 
 _history: list[dict] = []
 
@@ -70,6 +74,20 @@ TOOLS = [
                 "required": ["target", "target_base", "target_salary"],
             },
         },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_boss_jobs",
+            "description": "根据用户的职位需求在 Boss 直聘上搜索岗位并解析返回。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string", "description": "搜索关键词，例如 数据分析"},
+                },
+                "required": ["keyword"],
+            },
+        },
     }
 ]
 
@@ -100,8 +118,19 @@ def chat(body: ChatRequest) -> dict:
     if msg.tool_calls:
         tool = msg.tool_calls[0]
         args = json.loads(tool.function.arguments)
-        save_targets(args["target"], args["target_base"], args["target_salary"])
-        return {"reply": "好的，已记录你的求职意向。"}
+        
+        if tool.function.name == "update_persona":
+            save_targets(args["target"], args["target_base"], args["target_salary"])
+            return {"reply": "好的，已记录你的求职意向。"}
+            
+        elif tool.function.name == "search_boss_jobs":
+            try:
+                html = fetch_boss_html(args["keyword"])
+                jobs = parse_jobs(html)
+                formatted = "\n".join([f"- **{j.get('title')}** | {j.get('company')} | {j.get('salary')}" for j in jobs[:5]])
+                return {"reply": f"为您找到以下岗位：\n{formatted}"}
+            except Exception as e:
+                return {"reply": f"获取岗位失败：{e}"}
 
     reply = msg.content or ""
     _history.append({"role": "assistant", "content": reply})

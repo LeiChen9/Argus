@@ -115,8 +115,8 @@ def chat(body: ChatRequest) -> dict:
         raise HTTPException(status_code=502, detail=str(e))
 
     # 处理 Tool Call
-    if msg.tool_calls:
-        tool = msg.tool_calls[0]
+    if msg["tool_calls"]:
+        tool = msg["tool_calls"][0]
         args = json.loads(tool.function.arguments)
         
         if tool.function.name == "update_persona":
@@ -132,7 +132,7 @@ def chat(body: ChatRequest) -> dict:
             except Exception as e:
                 return {"reply": f"获取岗位失败：{e}"}
 
-    reply = msg.content or ""
+    reply = msg["content"] or ""
     _history.append({"role": "assistant", "content": reply})
     return {"reply": render_markdown(reply)}
 

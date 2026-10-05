@@ -18,6 +18,7 @@ from openai import OpenAI
 GEMINI_MODEL = "gemini-3.5-flash"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
+
 _MD = MarkdownIt("commonmark", {"html": False, "linkify": True})
 _MD.enable("strikethrough")
 
@@ -36,13 +37,34 @@ def read_env_key(name: str) -> str:
     raise RuntimeError(f".env 缺少 {name}")
 
 
+SCRAPER_API_KEY = read_env_key("scraper_apiKey")
+
+
 @cache
 def llm_client() -> OpenAI:
-    """Gemini 的 OpenAI 兼容端点。不装 google-genai，SDK 复用已有的 openai。"""
+    """Gemini 的 OpenAI 兼容端点。"""
     return OpenAI(
         api_key=read_env_key("gemini_apiKey"),
         base_url=GEMINI_BASE_URL,
     )
+
+
+@cache
+def zhipu_client() -> OpenAI:
+    """智谱备用端点。"""
+    return OpenAI(
+        api_key=read_env_key("zhipu_realtime_apiKey"),
+        base_url="https://open.bigmodel.cn/api/paas/v4/",
+    )
+
+
+# 模型链：按优先级排序
+MODEL_CHAIN = [
+    {"name": "gemini-3.5-flash", "client": lambda: llm_client()},
+    {"name": "glm-4.7-flash", "client": lambda: zhipu_client()},
+    {"name": "glm-5.3-flash", "client": lambda: zhipu_client()},
+]
+
 
 
 def load_json_file(path: Path) -> dict:
@@ -72,3 +94,25 @@ def clean_llm_json(raw: str) -> dict:
         if body.startswith("json"):
             body = body[4:].strip()
     return json.loads(body)
+
+
+def call_llm(messages: list[dict], *, tools: list[dict] | None = None, temperature: float = 0.7) -> dict:
+    """统一 LLM 调用，按 MODEL_CHAIN 顺序故障转移。返回 resp.choices[0].message 对应的 dict。"""
+    import logging
+    logger = logging.getLogger("argus.llm")
+    last_err = None
+    for item in MODEL_CHAIN:
+        model_name = item["name"]
+        client = item["client"]()
+        try:
+            kwargs = {"model": model_name, "messages": messages, "temperature": temperature}
+            if tools:
+                kwargs["tools"] = tools
+            resp = client.chat.completions.create(**kwargs)
+            logger.info(f"使用模型: {model_name}")
+            msg = resp.choices[0].message
+            return {"content": msg.content, "tool_calls": msg.tool_calls}
+        except Exception as e:
+            last_err = e
+            logger.warning(f"模型 {model_name} 失败: {e}")
+    raise RuntimeError(f"所有模型均不可用: {last_err}")

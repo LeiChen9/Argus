@@ -11,7 +11,7 @@ import re
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from common import GEMINI_MODEL, llm_client, render_markdown
+from common import MODEL_CHAIN, render_markdown, call_llm
 from persona import get_persona, init_persona_from_text, read_upload, save_targets
 from crawler import fetch_boss_html, parse_jobs
 
@@ -94,14 +94,15 @@ TOOLS = [
 
 @router.post("/api/chat")
 def chat(body: ChatRequest) -> dict:
-    """单轮问答。历史存在本进程内存里，重启即丢。支持 tool calling 更新意向。"""
+    """单轮问答。历史存在本进程内存里，重启即丢。支持 tool calling 更新意向，Gemini 失败自动切智谱。"""
     message = body.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="消息为空")
     _history.append({"role": "user", "content": message})
+
+    # 容灾链：统一走 call_llm
     try:
-        resp = llm_client().chat.completions.create(
-            model=GEMINI_MODEL,
+        msg = call_llm(
             messages=[
                 {"role": "system", "content": _system_with_persona()},
                 *_history[-(MAX_HISTORY - 1):],
@@ -109,12 +110,11 @@ def chat(body: ChatRequest) -> dict:
             tools=TOOLS,
             temperature=0.7,
         )
-    except Exception as e:
+    except RuntimeError as e:
         _history.pop()
-        raise HTTPException(status_code=502, detail=f"对话失败：{e}")
+        raise HTTPException(status_code=502, detail=str(e))
 
     # 处理 Tool Call
-    msg = resp.choices[0].message
     if msg.tool_calls:
         tool = msg.tool_calls[0]
         args = json.loads(tool.function.arguments)

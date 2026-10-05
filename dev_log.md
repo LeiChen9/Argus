@@ -398,3 +398,9 @@ SQLite 单行 JSON 列 + `schema_version`。落库时按上面第 2 条显式检
 `dangling_refs()`。零新依赖（`sqlite3` 是标准库）。
 
 未批准，不要自行开始。
+
+---
+
+## 2026-10-05 — Boss 直聘受限，暂切猎聘
+
+Boss 7 链路全验封：`web/geek/job`/`c101020100`→8k SPA 壳/10k 登录重定向，`premium+render`→44k 安全验证滑块页，`wapi`→`{"code":37,"zpData":{"seed":...}}`，`ultra_premium`→403 `plan not allow`。已试 `wait_for`/`session_number`/`keep_headers` 均同。ScraperAPI 当前破不了 zpData。已验 `猎聘 Liepin premium+render 196k → LLM 8条` 可 work（`上海 数据分析`）。当前 crawler 仅猎聘为实际可用源，Boss 暂停但保留 TODO（见 `crawler.py:TODO Boss`）。证据 `/tmp/boss_html/*` `/tmp/boss_deep*.log`。

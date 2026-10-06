@@ -552,6 +552,81 @@ button { font: inherit; color: inherit; }
   color: var(--on-accent);
 }
 
+/* ── Jobs 页 ── */
+.view--jobs {
+  display: block;
+  overflow-y: auto;
+  padding: 18px 18px 40px;
+}
+.jobs__meta { margin: 0 0 12px; font-size: 13px; color: var(--ink-3); }
+.jobs__grid .placeholder__note { grid-column: 1 / -1; text-align: center; }
+
+/* ── 岗位卡片：Chat 气泡内横滑轨道，Jobs 页直接排网格 ── */
+.jobcards {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+.jobcards::-webkit-scrollbar { display: none; }
+
+.jobcard {
+  flex: 0 0 190px;
+  scroll-snap-align: start;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--hairline);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(58, 46, 34, 0.06);
+  text-decoration: none;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+.jobcard:active { transform: scale(0.98); }
+
+.jobcard__top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+.jobcard__title {
+  overflow: hidden;
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.jobcard__salary {
+  flex: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.jobcard__company { margin: 0; font-size: 13px; color: var(--ink-2); }
+.jobcard__meta {
+  margin: 0;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.jobcard__meta:empty { display: none; }
+.jobcard__foot { margin: 2px 0 0; font-size: 11px; color: var(--ink-3); }
+
+.jobs__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+}
+.jobs__grid .jobcard { flex: initial; }
+
 /* ── Reduced motion ── */
 @media (prefers-reduced-motion: reduce) {
   .hero::before,

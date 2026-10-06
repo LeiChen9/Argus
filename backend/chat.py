@@ -1,7 +1,7 @@
 """Chat 领域：对话 + 简历上传初始化 Persona。
 
 上传与解析实现全在 persona，本文件只做路由薄层。
-对话调智谱，system prompt 里拼上已解析的 persona，历史存内存单例。
+对话走 LLM 与工具循环（Agent loop），system prompt 里拼上已解析的 persona，历史存内存单例。
 """
 
 import json
@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from common import MODEL_CHAIN, render_markdown, call_llm
 from persona import get_persona, init_persona_from_text, read_upload, save_targets
 from crawler import fetch_liepin_html, parse_jobs, fetch_boss_recommendations
+from jobs import normalize, save_batch
 
 logger = logging.getLogger("argus.chat")
 
@@ -27,12 +28,18 @@ SYSTEM_PROMPT = """你是 Argus，一个职业发展助手。
 
 每次只输出一两句话。不要长篇大论。
 
-当用户明确了求职意向（包括职位列表、意向城市、期望薪资），你必须调用 update_persona 工具将其保存。
-- target 是职位列表，按意向度从高到低排列。
-- 三项都明确后才能调用。
+你有两个工具：
 
-当用户要求搜索岗位时，使用 search_boss_jobs 工具（优先返回 BOSS直聘个性化推荐；本地 CDP 浏览器不可用时回退猎聘关键词搜索）。
-- 例如：“帮我搜一下上海的数据分析岗位” -> 调用 search_boss_jobs(keyword="上海 数据分析")。"""
+update_persona：记录求职意向。target 是职位列表，按意向度从高到低；
+职位列表、意向城市、期望薪资三项都明确后才调用。
+
+search_boss_jobs：搜索岗位，结果以卡片展示。
+- 只在用户主动要求搜索或查看岗位时调用；刚保存完意向，先问用户要不要搜一轮。
+- keyword 由你组合：用户这次给的条件优先，缺的部分从简历信息的 target 和 target_base 补齐。
+- 先走 BOSS直聘登录账号的个性化推荐（约 15-30 秒），不可用时自动回退猎聘关键词搜索。
+- 结果先存入 Jobs 页，再以卡片直接展示给用户，你无需复述岗位明细。
+- 返回 JSON 摘要：status / source / count / preview（前 5 条）。用一两句点评岗位质量、与用户意向的匹配度，或给出下一步建议。preview 是给你点评用的，不要在回复里罗列岗位清单。
+- status 为 error 时如实转告，并建议换个关键词。"""
 
 _history: list[dict] = []
 
@@ -79,11 +86,11 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_boss_jobs",
-            "description": "根据用户的职位需求搜索岗位。优先返回 BOSS直聘个性化推荐；CDP 不可用或无结果时回退猎聘关键词搜索。",
+            "description": "按关键词搜索岗位：结果先持久化到 Jobs 页，再在对话中以卡片展示，返回 JSON 摘要供你点评。仅在用户主动要求搜索或查看岗位时调用。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "keyword": {"type": "string", "description": "搜索关键词，例如 数据分析"},
+                    "keyword": {"type": "string", "description": "检索词，组合自用户本次要求与求职意向（target + target_base），如「上海 数据分析」"},
                 },
                 "required": ["keyword"],
             },
@@ -92,58 +99,83 @@ TOOLS = [
 ]
 
 
+MAX_TOOL_STEPS = 4
+
+
+def _search_jobs(keyword: str) -> tuple[dict, list[dict] | None]:
+    """BOSS 推荐优先、CDP 断开回退猎聘。先持久化，再回摘要与卡片给 LLM/前端。"""
+    try:
+        raws = fetch_boss_recommendations(max_batches=1, timeout=25)
+        source = "boss_recommend"
+    except OSError:
+        raws, source = [], "liepin"
+    cards = [normalize(j, source) for j in raws]
+    if not cards:
+        source = "liepin"
+        cards = [normalize(j, source) for j in parse_jobs(fetch_liepin_html(keyword))]
+    if not cards:
+        return {"status": "error", "detail": "两个来源都没有结果"}, None
+    save_batch(cards, keyword)
+    summary = {
+        "status": "ok",
+        "source": source,
+        "count": len(cards),
+        "preview": [{k: c[k] for k in ("title", "company", "salary")} for c in cards[:5]],
+    }
+    return summary, cards
+
+
+def _execute_tool(name: str, args: dict) -> tuple[dict, list[dict] | None]:
+    """执行工具，返回 (回喂 LLM 的 JSON 结果, 本轮岗位卡片或 None)。"""
+    if name == "update_persona":
+        save_targets(args["target"], args["target_base"], args["target_salary"])
+        return {"status": "ok"}, None
+    return _search_jobs(args["keyword"])
+
+
+def _run_agent(messages: list[dict]) -> tuple[dict, list[dict] | None]:
+    """LLM ↔ 工具循环直到产出最终文本。卡片只旁路给前端，不进 LLM 上下文。"""
+    cards = None
+    for _ in range(MAX_TOOL_STEPS):
+        msg = call_llm(messages, tools=TOOLS)
+        if not msg["tool_calls"]:
+            return msg, cards
+        messages.append({
+            "role": "assistant",
+            "content": msg["content"],
+            # 原样回填：Gemini 的 tool_call 携带 extra_content.google.thought_signature，丢了会 400
+            "tool_calls": [t.model_dump(exclude_none=True) for t in msg["tool_calls"]],
+        })
+        for t in msg["tool_calls"]:
+            result, found = _execute_tool(t.function.name, json.loads(t.function.arguments))
+            cards = found or cards
+            messages.append({"role": "tool", "tool_call_id": t.id, "content": json.dumps(result, ensure_ascii=False)})
+    return msg, cards
+
+
 @router.post("/api/chat")
 def chat(body: ChatRequest) -> dict:
-    """单轮问答。历史存在本进程内存里，重启即丢。支持 tool calling 更新意向，Gemini 失败自动切智谱。"""
+    """单轮问答 + Agent 工具循环。历史存本进程内存，重启即丢。"""
     message = body.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="消息为空")
-    _history.append({"role": "user", "content": message})
 
-    # 容灾链：统一走 call_llm
     try:
-        msg = call_llm(
-            messages=[
-                {"role": "system", "content": _system_with_persona()},
-                *_history[-(MAX_HISTORY - 1):],
-            ],
-            tools=TOOLS,
-            temperature=0.7,
-        )
+        msg, cards = _run_agent([
+            {"role": "system", "content": _system_with_persona()},
+            *_history[-(MAX_HISTORY - 1):],
+            {"role": "user", "content": message},
+        ])
     except RuntimeError as e:
-        _history.pop()
         raise HTTPException(status_code=502, detail=str(e))
 
-    # 处理 Tool Call
-    if msg["tool_calls"]:
-        tool = msg["tool_calls"][0]
-        args = json.loads(tool.function.arguments)
-        
-        if tool.function.name == "update_persona":
-            save_targets(args["target"], args["target_base"], args["target_salary"])
-            return {"reply": "好的，已记录你的求职意向。"}
-            
-        elif tool.function.name == "search_boss_jobs":
-            try:
-                source = "BOSS直聘·为你推荐"
-                jobs = []
-                try:
-                    jobs = fetch_boss_recommendations(max_batches=1, timeout=25)
-                except Exception:
-                    pass
-                if not jobs:
-                    jobs = parse_jobs(fetch_liepin_html(args["keyword"]))
-                    source = "猎聘"
-                if not jobs:
-                    return {"reply": "暂未找到匹配岗位，请换关键词或城市试试。"}
-                formatted = "\n".join([f"- **{j.get('title')}** | {j.get('company') or j.get('boss_name') or ''} | {j.get('salary')} | {j.get('link') or j.get('job_link') or ''}" for j in jobs[:5]])
-                return {"reply": f"为您找到以下岗位（来源：{source}）：\n{formatted}"}
-            except Exception as e:
-                return {"reply": f"获取岗位失败：{e}"}
-
     reply = msg["content"] or ""
+    _history.append({"role": "user", "content": message})
     _history.append({"role": "assistant", "content": reply})
-    return {"reply": render_markdown(reply)}
+    resp = {"reply": render_markdown(reply)}
+    if cards:
+        resp["jobs"] = cards
+    return resp
 
 
 @router.post("/api/persona/init")

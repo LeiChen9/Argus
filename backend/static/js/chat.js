@@ -1,4 +1,5 @@
 import { go } from "./nav.js";
+import { jobCards } from "./cards.js";
 
 const msgs = document.getElementById("msgs");
 const form = document.getElementById("composer");
@@ -107,6 +108,7 @@ form.addEventListener("submit", async (event) => {
       return;
     }
     showReply(data.reply);
+    if (data.jobs?.length) show(row("them", null, jobCards(data.jobs)));
   } catch (err) {
     show(row("them", `我说不了话：${err.message}`));
   } finally {

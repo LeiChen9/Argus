@@ -1,0 +1,3 @@
+[submodule "vendor/boss-zhipin-scraper"]
+	path = vendor/boss-zhipin-scraper
+	url = https://github.com/eatmoreduck/boss-zhipin-scraper.git

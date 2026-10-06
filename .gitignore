@@ -222,5 +222,9 @@ __marimo__/
 # Argus: persona runtime store (memory singleton spillover, gitignored)
 backend/persona.json
 
+# Argus: 本地数据与生成报告只落盘不入库
+data/
+boss_recommendations_*.md
+
 # Argus: nohup 起的 uvicorn 落在这里，是日志不是源码
 nohup.out

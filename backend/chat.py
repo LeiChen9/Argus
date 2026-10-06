@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from common import MODEL_CHAIN, render_markdown, call_llm
 from persona import get_persona, init_persona_from_text, read_upload, save_targets
-from crawler import fetch_liepin_html, parse_jobs
+from crawler import fetch_liepin_html, parse_jobs, fetch_boss_recommendations
 
 logger = logging.getLogger("argus.chat")
 
@@ -31,7 +31,7 @@ SYSTEM_PROMPT = """你是 Argus，一个职业发展助手。
 - target 是职位列表，按意向度从高到低排列。
 - 三项都明确后才能调用。
 
-当用户要求搜索岗位时，使用 search_boss_jobs 工具（当前来源：猎聘，Boss 直聘暂受限）。
+当用户要求搜索岗位时，使用 search_boss_jobs 工具（优先返回 BOSS直聘个性化推荐；本地 CDP 浏览器不可用时回退猎聘关键词搜索）。
 - 例如：“帮我搜一下上海的数据分析岗位” -> 调用 search_boss_jobs(keyword="上海 数据分析")。"""
 
 _history: list[dict] = []
@@ -79,7 +79,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_boss_jobs",
-            "description": "根据用户的职位需求搜索岗位并解析返回。当前实际来源：猎聘。",
+            "description": "根据用户的职位需求搜索岗位。优先返回 BOSS直聘个性化推荐；CDP 不可用或无结果时回退猎聘关键词搜索。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -125,12 +125,19 @@ def chat(body: ChatRequest) -> dict:
             
         elif tool.function.name == "search_boss_jobs":
             try:
-                html = fetch_liepin_html(args["keyword"])
-                jobs = parse_jobs(html)
+                source = "BOSS直聘·为你推荐"
+                jobs = []
+                try:
+                    jobs = fetch_boss_recommendations(max_batches=1, timeout=25)
+                except Exception:
+                    pass
+                if not jobs:
+                    jobs = parse_jobs(fetch_liepin_html(args["keyword"]))
+                    source = "猎聘"
                 if not jobs:
                     return {"reply": "暂未找到匹配岗位，请换关键词或城市试试。"}
-                formatted = "\n".join([f"- **{j.get('title')}** | {j.get('company')} | {j.get('salary')} | {j.get('link','')}" for j in jobs[:5]])
-                return {"reply": f"为您找到以下岗位（来源：猎聘）：\n{formatted}"}
+                formatted = "\n".join([f"- **{j.get('title')}** | {j.get('company') or j.get('boss_name') or ''} | {j.get('salary')} | {j.get('link') or j.get('job_link') or ''}" for j in jobs[:5]])
+                return {"reply": f"为您找到以下岗位（来源：{source}）：\n{formatted}"}
             except Exception as e:
                 return {"reply": f"获取岗位失败：{e}"}
 

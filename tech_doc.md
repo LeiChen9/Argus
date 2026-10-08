@@ -3,7 +3,7 @@
 已达成共识的技术选型。**只记已确定的选择和决策理由**，不记实现细节、不记待办。
 进度与踩坑记录写 `dev_log.md`。
 
-Last updated: 2026-10-03
+Last updated: 2026-10-08
 
 ---
 
@@ -134,6 +134,16 @@ uvicorn main:app --app-dir backend --port 7800
 （它 listen 在 IPv6 `*:8000`，会劫持 `localhost` 的 IPv6 解析，表现为收到 501）。
 
 端口只出现在本节，**代码里没有硬编码端口**。换端口只改这一行。
+
+## 公网访问（Cloudflare Tunnel）
+
+不做 Workers 迁移（FastAPI + 本地文件存储 + 本机浏览器探针跑不上 Workers），
+用 Cloudflare Tunnel 把本机 7800 暴露出去。
+
+- 临时预览：`cloudflared tunnel --url http://localhost:7800`（免登录，地址每次变）
+- 正式：`cloudflared tunnel login` → 建 tunnel → 绑自有域名 → 常驻运行
+- `cloudflared` 用 homebrew 装；`cert.pem` 缺失时 `tunnel list` 会报错，
+  需要重新 `tunnel login`（FluentChat 走 wrangler，不共用这份授权）。
 
 ## 约定
 

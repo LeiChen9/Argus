@@ -154,6 +154,13 @@ uvicorn main:app --app-dir backend --port 7800
   最容易在重写入口文件时被漏掉——文件在磁盘上、代码看着完全合理，但浏览器不下载它。
   检查要同时匹配 `from "..."` 和 `import "..."` 两种形式。
 
+## Crawler (2026-10-08 定稿)
+
+- **BOSS 推荐流 `wapi/zpgeek/recommend/job/list.json` 上限约 30 条**（2 批，每批 15 条，`page=1` 且 `hasMore` 为空；第 3 批 `Network.requestWillBeSent` 无新请求，滚动 3 次重试仍 `None`，`diag_net.py` 复现）。`crawler.py` `fetch_boss_recommendations` 初始 `Page.navigate zhipin.com` 即拿 15 条，滚动仅再得 1 批；`max_batches=5` 亦止于 30。
+- **全量搜索 `wapi/zpgeek/search/joblist.json` 已封 `code:37 zpData seed`**，`ScraperAPI premium+render` 44k 滑块，不可用；当前唯一真实源为推荐流，猎聘 Liepin 为回退。
+- **全量 JD**：`fetch_boss_details` 复用 `vendor/boss-zhipin-scraper scrape_details` 逐条 `job_detail` 拿 `jd/skill_tags/boss_active_status`，`extract_detail_fields` 校验；`jd` 为空视为关闭过滤，不入 `boss_jobs.json`。
+- **存储语义**：`data/boss_jobs.json` 为**覆盖快照**（`save_snapshot`，`data/jobs.json` 已废弃删除），物理意义=当前推荐开放中岗位，非追加；仅保留带 `jd` 的开放岗。
+
 ## 尚未决定（不要自行假设）
 
 - Persona 的存储 schema 与 Evidence 链怎么建模

@@ -13,8 +13,8 @@ from pydantic import BaseModel, Field
 
 from common import MODEL_CHAIN, render_markdown, call_llm
 from persona import get_persona, init_persona_from_text, read_upload, save_targets
-from crawler import fetch_liepin_html, parse_jobs, fetch_boss_recommendations
-from jobs import normalize, save_batch
+from crawler import fetch_liepin_html, parse_jobs, fetch_boss_recommendations, fetch_boss_details
+from jobs import normalize, save_snapshot
 
 logger = logging.getLogger("argus.chat")
 
@@ -103,19 +103,30 @@ MAX_TOOL_STEPS = 4
 
 
 def _search_jobs(keyword: str) -> tuple[dict, list[dict] | None]:
-    """BOSS 推荐优先、CDP 断开回退猎聘。先持久化，再回摘要与卡片给 LLM/前端。"""
     try:
         raws = fetch_boss_recommendations(max_batches=1, timeout=25)
         source = "boss_recommend"
     except OSError:
         raws, source = [], "liepin"
-    cards = [normalize(j, source) for j in raws]
+    if source == "boss_recommend" and raws:
+        details = fetch_boss_details(raws)
+        merged = []
+        for j in raws:
+            key = j.get("encrypt_job_id") or j.get("job_link") or j.get("title")
+            d = details.get(key)
+            if d:
+                j = {**j, "jd": d.get("jd", ""), "skill_tags": d.get("skill_tags", []), "boss_active_status": d.get("boss_active_status", "")}
+                if j["jd"]:
+                    merged.append(j)
+        cards = [normalize(j, source) for j in merged]
+    else:
+        cards = [normalize(j, source) for j in raws]
     if not cards:
         source = "liepin"
         cards = [normalize(j, source) for j in parse_jobs(fetch_liepin_html(keyword))]
     if not cards:
         return {"status": "error", "detail": "两个来源都没有结果"}, None
-    save_batch(cards, keyword)
+    save_snapshot(cards, keyword)
     summary = {
         "status": "ok",
         "source": source,

@@ -751,6 +751,39 @@ button { font: inherit; color: inherit; }
   overflow-wrap: anywhere;
 }
 
+/* 解读的外层折叠：JD 展开在前，解读收起在后 */
+.ai__wrap { margin: 18px 0 0; }
+.ai__wsum {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 14px;
+  border: 0.5px solid var(--hairline);
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  list-style: none;
+}
+.ai__wsum::-webkit-details-marker { display: none; }
+.ai__wttl { flex: 1 1 auto; font-size: 15px; font-weight: 700; }
+.ai__wcat {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--bubble-me);
+  color: var(--on-bubble);
+  font-size: 12px;
+  font-weight: 700;
+}
+.ai__wcat.is-apply_now                 { color: #2e6b4f; background: rgba(46, 107, 79, .12); }
+.ai__wcat.is-build_evidence_then_apply { color: var(--accent); background: var(--glow); }
+.ai__wcat.is-learn_then_apply          { color: #3f6b8a; background: rgba(63, 107, 138, .12); }
+.ai__wcat.is-develop_then_apply,
+.ai__wcat.is-deprioritize              { color: #7a4f6b; background: rgba(122, 79, 107, .12); }
+.ai__wrap[open] > .ai__wsum { border-radius: 12px 12px 0 0; }
+.ai__wrap[open] > .ai__wsum .ai__chev { transform: rotate(-135deg) translate(-2px, -2px); }
+.ai__wrap > .ai__box { margin: 0; border-radius: 0 0 12px 12px; }
+
 .jdetail__cta {
   flex: 0 0 auto;
   margin: 0 18px calc(18px + env(safe-area-inset-bottom));
@@ -765,6 +798,280 @@ button { font: inherit; color: inherit; }
 }
 .jdetail__cta:active { opacity: .82; }
 
+/* ── AI 解读 ──
+   状态色都过 4.5:1（对白底），小字可直接用，不用再套底色。 */
+.ai__slot { margin: 0; }
+.ai__loading { margin: 18px 0 0; }
+
+.ai__box {
+  margin: 18px 0 0;
+  padding: 14px;
+  border: 0.5px solid var(--hairline);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.ai__stamp {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.ai__verdict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+}
+.ai__badge {
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: var(--bubble-me);
+  color: var(--on-bubble);
+  font-size: 13px;
+  font-weight: 700;
+}
+.ai__conf { font-size: 12.5px; color: var(--ink-2); }
+.ai__badge.is-apply_now                  { color: #2e6b4f; background: rgba(46, 107, 79, .12); }
+.ai__badge.is-build_evidence_then_apply  { color: var(--accent); background: var(--glow); }
+.ai__badge.is-learn_then_apply           { color: #3f6b8a; background: rgba(63, 107, 138, .12); }
+.ai__badge.is-develop_then_apply,
+.ai__badge.is-deprioritize               { color: #7a4f6b; background: rgba(122, 79, 107, .12); }
+
+/* 地点/薪资是否符合求职意向：整句陈述，不再是"已对齐"这种没主语的词 */
+.ai__chips { margin: 10px 0 0; }
+.ai__meta {
+  margin: 0 0 5px;
+  padding: 6px 10px;
+  border: 0.5px solid var(--hairline);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.ai__meta.is-conflict,
+.ai__meta.is-below_target {
+  color: #a03d33;
+  border-color: rgba(160, 61, 51, .32);
+  background: rgba(160, 61, 51, .05);
+}
+.ai__meta.is-above_target {
+  color: #2e6b4f;
+  border-color: rgba(46, 107, 79, .32);
+  background: rgba(46, 107, 79, .05);
+}
+
+.ai__why {
+  margin: 10px 0 0;
+  font-size: 14px;
+  line-height: 1.66;
+  color: var(--ink);
+}
+
+/* 分布：卡片为主，细条只是它们的比例示意 */
+.ai__ov { margin: 12px 0 0; }
+.ai__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 7px;
+}
+.ai__card {
+  padding: 9px 10px;
+  border: 0.5px solid var(--hairline);
+  border-left-width: 2.5px;
+  border-radius: 9px;
+  background: #fff;
+}
+.ai__card.is-ok  { border-left-color: #2e6b4f; }
+.ai__card.is-mv  { border-left-color: var(--accent); }
+.ai__card.is-gap { border-left-color: #a03d33; }
+.ai__card.is-unk { border-left-color: #6b6259; }
+.ai__cardn {
+  display: block;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.ai__card.is-ok  .ai__cardn { color: #2e6b4f; }
+.ai__card.is-mv  .ai__cardn { color: var(--accent); }
+.ai__card.is-gap .ai__cardn { color: #a03d33; }
+.ai__card.is-unk .ai__cardn { color: #6b6259; }
+.ai__cardl { display: block; margin: 1px 0 0; font-size: 12.5px; font-weight: 600; }
+.ai__cardd {
+  display: block;
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.ai__bar {
+  display: flex;
+  height: 4px;
+  margin: 8px 0 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--glow);
+}
+.ai__seg { display: block; }
+.ai__seg.is-ok  { background: #2e6b4f; }
+.ai__seg.is-mv  { background: var(--accent); }
+.ai__seg.is-gap { background: #a03d33; }
+.ai__seg.is-unk { background: #6b6259; }
+
+
+
+.ai__sec { margin: 14px 0 0; }
+.ai__h {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+  letter-spacing: .02em;
+}
+
+/* 折叠：原生 details，箭头自己转 */
+.ai__fold {
+  margin: 8px 0 0;
+  border-top: 0.5px solid var(--hairline);
+  padding-top: 8px;
+}
+.ai__sum {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+}
+.ai__sum::-webkit-details-marker { display: none; }
+.ai__sumt { flex: 1 1 auto; min-width: 0; }
+.ai__chev {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform .2s var(--soft);
+}
+details[open] > .ai__sum .ai__chev { transform: rotate(-135deg) translate(-2px, -2px); }
+
+.ai__req { padding: 7px 0; }
+.ai__req + .ai__req { border-top: 0.5px solid var(--hairline); }
+.ai__rhead { display: flex; align-items: flex-start; gap: 7px; }
+.ai__rtext {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.ai__rtags {
+  flex: 0 0 auto;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ai__tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ai__tag.is-ok  { color: #2e6b4f; background: rgba(46, 107, 79, .1); }
+.ai__tag.is-mv  { color: var(--accent); background: var(--glow); }
+.ai__tag.is-gap { color: #a03d33; background: rgba(160, 61, 51, .1); }
+.ai__tag.is-unk { color: #6b6259; background: rgba(107, 98, 89, .1); }
+.ai__tag.is-diff { color: #5f6b8a; background: rgba(95, 107, 138, .1); }
+.ai__tag.is-eff { color: #7a6a55; background: rgba(122, 106, 85, .1); }
+
+.ai__rbody { padding: 2px 0 4px 14px; }
+.ai__ev { margin: 0; padding-left: 15px; }
+.ai__ev li {
+  margin: 3px 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+.ai__gap {
+  margin: 6px 0 0;
+  padding-left: 9px;
+  border-left: 2px solid rgba(160, 61, 51, .3);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.ai__blk { padding: 8px 0; }
+.ai__blk + .ai__blk { border-top: 0.5px solid var(--hairline); }
+.ai__blkh {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.ai__txt {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.66;
+  color: var(--ink-2);
+}
+.ai__blkmeta {
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+/* 防守点：可能被追问的问题，比卖点更需要被看见 */
+.ai__blk--warn {
+  padding-left: 10px;
+  border-left: 2px solid rgba(160, 61, 51, .28);
+}
+
+.ai__open {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bar-bg);
+}
+
+.ai__copy {
+  margin: 8px 0 0;
+  padding: 7px 14px;
+  border: 0.5px solid var(--hairline);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ai__copy:active { opacity: .6; }
+.ai__copy.is-done { color: #2e6b4f; border-color: rgba(46, 107, 79, .32); }
+
+.ai__foot {
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--hairline);
+  text-align: center;
+}
+.ai__foot .ai__copy { margin: 0; }
+
+/* clipboard 不可用时的临时选中框 */
+.ai__ta { position: fixed; top: -1000px; opacity: 0; }
+
 /* ── Reduced motion ── */
 @media (prefers-reduced-motion: reduce) {
   .hero::before,
@@ -777,4 +1084,5 @@ button { font: inherit; color: inherit; }
   .tab[aria-selected="true"] svg {
     animation: none !important;
   }
+  .ai__chev { transition: none !important; }
 }

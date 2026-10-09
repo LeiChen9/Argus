@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from common import GEMINI_MODEL, clean_llm_json, llm_client  # noqa: E402
+from common import active_chain, call_llm, clean_llm_json  # noqa: E402
 
 PERSONA_PATH = ROOT / "backend" / "persona.json"
 JOBS_PATH = ROOT / "data" / "boss_jobs.json"
@@ -162,14 +162,10 @@ def build_messages(job: dict, resume: str) -> list[dict]:
     ]
 
 
-def analyze_one(job: dict, resume: str) -> dict:
-    """单岗位调一次 LLM，返回原始 JSON。"""
-    resp = llm_client().chat.completions.create(
-        model=GEMINI_MODEL,
-        messages=build_messages(job, resume),
-        temperature=0.1,
-    )
-    return clean_llm_json(resp.choices[0].message.content)
+def analyze_one(job: dict, resume: str) -> tuple[dict, str]:
+    """单岗位调一次 LLM（容灾在 call_llm 里），返回 (分析结果, 实际用的模型)。"""
+    msg = call_llm(build_messages(job, resume), temperature=0.1)
+    return clean_llm_json(msg["content"]), msg["model"]
 
 
 def main() -> None:
@@ -178,18 +174,22 @@ def main() -> None:
     jobs = [j for j in store["jobs"].values() if j["jd"]]
 
     resume = build_resume_profile(persona)
+    chain = [i["name"] for i in active_chain()]
     payload = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M"),
-        "model": GEMINI_MODEL,
+        "model_chain": chain,
         "persona": persona,
         "total": len(jobs),
         "results": [],
     }
+    print(f"岗位 {len(jobs)} 个 · 容灾链 {' → '.join(chain)}")
+
     with OUT_JSON.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
         for i, job in enumerate(jobs, 1):
             t0 = time.perf_counter()
+            analysis, used = analyze_one(job, resume)
             payload["results"].append(
                 {
                     "job": {
@@ -200,7 +200,8 @@ def main() -> None:
                         "location": job.get("location", ""),
                         "link": job.get("link", ""),
                     },
-                    "analysis": analyze_one(job, resume),
+                    "model": used,
+                    "analysis": analysis,
                 }
             )
             # 每条做完就重写整个文件：中断时已完成的结果留在盘上，
@@ -210,10 +211,9 @@ def main() -> None:
             f.truncate()
             print(
                 f"  [{i}/{len(jobs)}] {job['company']} · {job['title']} · "
-                f"{time.perf_counter() - t0:.1f}s",
+                f"{used} · {time.perf_counter() - t0:.1f}s",
                 flush=True,
             )
-            import pdb; pdb.set_trace()  # noqa: T100
 
 
 if __name__ == "__main__":

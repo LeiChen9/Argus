@@ -1,8 +1,10 @@
 /* 岗位详情：卡片是 #job/<id> 锚点，这里按 hash 找岗位渲染。
-   数据来自 /api/jobs 全量返回 + cards 渲染时顺手 remember 进来的当轮岗位，
-   后端不用为详情页加任何接口。 */
+   岗位数据来自 /api/jobs 全量返回 + cards 渲染时顺手 remember 进来的当轮岗位；
+   AI 解读另走 /api/jobs/<id>/analysis，渲染完再异步补进来（见 analysis.js）。 */
 
 import { go, back as navBack } from "./nav.js";
+import { aiSection } from "./analysis.js";
+import { deRadical, el } from "./dom.js";
 
 export const SOURCE = { boss_recommend: "BOSS直聘·为你推荐", liepin: "猎聘" };
 
@@ -28,21 +30,6 @@ const find = async (id) => {
     });
   await store;
   return remembered.get(id);
-};
-
-// 抓取器的字体解码会把常用字还原成康熙部首（建⽴⽬标）。只对这几个码位段做
-// NFKC——整串 NFKC 会把全角逗号也压成半角。
-const RADICALS = new RegExp(
-  "[\\u2E80-\\u2EFF\\u2F00-\\u2FDF\\uF900-\\uFAFF\\uFE30-\\uFE4F]",
-  "g",
-);
-const deRadical = (s) => String(s ?? "").replace(RADICALS, (c) => c.normalize("NFKC"));
-
-const el = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text != null) node.textContent = text;
-  return node;
 };
 
 const row = (label, value) => {
@@ -95,8 +82,19 @@ const render = (job) => {
     box.append(...rows);
     kids.push(box);
   }
+
+  // JD 是投递的原始依据，默认展开；解读是模型的推论，默认折叠。
   kids.push(el("pre", "jdetail__jd", deRadical(job.jd) || "（暂无职位描述）"));
+
+  // 解读的挂载点：先占位，异步拿到结果后整段替换。
+  const slot = el("div", "ai__slot");
+  const loading = el("p", "ai__loading typing");
+  loading.append(el("i"), el("i"), el("i"));
+  slot.appendChild(loading);
+  kids.push(slot);
+
   document.getElementById("job-body").replaceChildren(...kids);
+  return slot;
 };
 
 let shown = "";
@@ -105,8 +103,15 @@ const show = async (id) => {
   if (!job) return; // 岗位已被新快照覆盖：留在原地，别开一个空页
   if (shown === id) return;
   shown = id;
-  render(job);
+  const slot = render(job);
   go("job");
+
+  // 解读是懒加载的，返回时可能已经切到别的岗位或离开了详情页，丢弃即可。
+  const doc = await fetch(`/api/jobs/${encodeURIComponent(id)}/analysis`)
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  if (!doc || shown !== id || !slot.isConnected) return;
+  slot.replaceChildren(aiSection(job, doc));
 };
 
 const close = () => {

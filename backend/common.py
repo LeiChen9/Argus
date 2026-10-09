@@ -2,6 +2,7 @@
 
 - read_env_key: 从项目根 .env 读 key
 - llm_client: 走 Gemini 的 OpenAI 兼容端点，chat 和 persona 共用
+- active_chain / call_llm: 模型容灾链，按 active_chain 顺序故障转移
 - load_json_file / save_json_file: persona.json 落盘底层
 - clean_llm_json: 去 markdown 代码块后解析 JSON
 """
@@ -9,9 +10,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from functools import cache
 from pathlib import Path
 
+from chinese_calendar import is_holiday, is_workday
 from markdown_it import MarkdownIt
 from openai import OpenAI
 
@@ -58,12 +61,54 @@ def zhipu_client() -> OpenAI:
     )
 
 
-# 模型链：按优先级排序
+@cache
+def deepseek_client() -> OpenAI:
+    """DeepSeek 兜底端点。非开放时段见 deepseek_open。"""
+    return OpenAI(
+        api_key=read_env_key("deepseek_apiKey"),
+        base_url="https://api.deepseek.com/v1/",
+    )
+
+
+# ── DeepSeek 开放时段 ──────────────────────────────────────────────────────
+# DeepSeek 不是 7×24 可用：北京时间周一至周五（法定节假日除外）9:00-12:00、
+# 14:00-18:00 为高峰，峰段调用会被限流。先判时段再入链，而不是失败后重试。
+DEEPSEEK_MODEL = "deepseek-v4-flash"
+DEEPSEEK_PEAK_HOURS = frozenset(range(9, 12)) | frozenset(range(14, 18))
+
+
+def deepseek_open(now: datetime | None = None) -> bool:
+    """DeepSeek 现在开放吗：法定节假日全天，否则工作日的非峰段小时。
+
+    节假日认 chinese_calendar：调休补班的周六算工作日，法定假期的周日算
+    节假日，手写 weekday() 判断两者都会判错。
+    """
+    now = now or datetime.now()
+    if is_holiday(now.date()):
+        return True
+    return is_workday(now.date()) and now.hour not in DEEPSEEK_PEAK_HOURS
+
+
+# 模型链：按优先级排序。DeepSeek 缺 key 或不在开放时段内不入链。
 MODEL_CHAIN = [
-    {"name": "gemini-3.5-flash", "client": lambda: llm_client()},
-    {"name": "glm-4.7-flash", "client": lambda: zhipu_client()},
-    {"name": "glm-5.3-flash", "client": lambda: zhipu_client()},
+    {"name": GEMINI_MODEL, "client": llm_client},
+    {"name": "glm-4.7-flash", "client": zhipu_client},
+    {"name": DEEPSEEK_MODEL, "client": deepseek_client},
 ]
+
+
+def active_chain() -> list[dict]:
+    """当下真正可用的模型链。"""
+    try:
+        read_env_key("deepseek_apiKey")
+        deepseek_usable = deepseek_open()
+    except RuntimeError:
+        deepseek_usable = False
+    return [
+        item
+        for item in MODEL_CHAIN
+        if item["name"] != DEEPSEEK_MODEL or deepseek_usable
+    ]
 
 
 
@@ -97,11 +142,11 @@ def clean_llm_json(raw: str) -> dict:
 
 
 def call_llm(messages: list[dict], *, tools: list[dict] | None = None, temperature: float = 0.7) -> dict:
-    """统一 LLM 调用，按 MODEL_CHAIN 顺序故障转移。返回 resp.choices[0].message 对应的 dict。"""
+    """统一 LLM 调用，按 active_chain 顺序故障转移。返回 message 内容与实际使用的模型名。"""
     import logging
     logger = logging.getLogger("argus.llm")
     last_err = None
-    for item in MODEL_CHAIN:
+    for item in active_chain():
         model_name = item["name"]
         client = item["client"]()
         try:
@@ -111,7 +156,7 @@ def call_llm(messages: list[dict], *, tools: list[dict] | None = None, temperatu
             resp = client.chat.completions.create(**kwargs)
             logger.info(f"使用模型: {model_name}")
             msg = resp.choices[0].message
-            return {"content": msg.content, "tool_calls": msg.tool_calls}
+            return {"content": msg.content, "tool_calls": msg.tool_calls, "model": model_name}
         except Exception as e:
             last_err = e
             logger.warning(f"模型 {model_name} 失败: {e}")

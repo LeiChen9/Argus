@@ -40,19 +40,21 @@ Last updated: 2026-10-09
 backend/
   main.py                      FastAPI app + no-store 中间件
   chat.py                      /api/chat Agent 循环、/api/persona*
-  jobs.py                      /api/jobs、normalize、save_snapshot
+  jobs.py                      /api/jobs、/api/jobs/{id}/analysis、normalize、save_snapshot
   crawler.py                   BOSS CDP 采集 + 猎聘回退
   persona.py                   简历解析与 Persona 落盘
   common.py                    .env 读取、LLM 容灾链、markdown 渲染
   me.py                        /api/me 占位
   static/
     index.html                 由 FastAPI StaticFiles 直接 serve
-    css/app.css                设计系统，移植自 FluentChat
+    css/app.css                设计系统，移植自 FluentChat；含岗位详情与 AI 解读段
     js/app.js                  tab 切换 + 招呼语注入 + 引入 chat.js + initJobDetail
     js/chat.js                 气泡渲染 / 调 /api/chat / 上传 chip
     js/jobs.js                 Jobs 页拉 /api/jobs
     js/cards.js                岗位卡片（Chat 横滑轨道与 Jobs 网格共用）
-    js/job.js                  岗位详情：hash 路由 + 渲染
+    js/job.js                  岗位详情：hash 路由 + 岗位本体渲染 + 拉解读
+    js/analysis.js             AI 解读渲染：结论、要求拆解、面试打法、补齐行动
+    js/dom.js                  el / deRadical / fold，job.js 与 analysis.js 共用
     js/nav.js                  视图切换 + 返回来源记忆
     js/greeting.js             时段×星期招呼语
     assets/argus-anime.jpeg    NPC 源图（用户设计）
@@ -67,8 +69,9 @@ dev_log.md          开发日志
 
 ## Frontend
 
-**设计系统移植自 `../FluentChat/site/`**，不重复造轮子。`css/app.css` 268 行里
-除注释外与上游逐字节相同。回上游取改动：`diff` 一下就知道我们改过哪。
+**设计系统移植自 `../FluentChat/site/`**，不重复造轮子。移植进来的那部分
+（首页 + Chat + tabbar）与上游逐字节相同，回上游取改动时 `diff` 一下就知道我们改过哪。
+往后追加的段落（岗位详情、AI 解读）是我们自己的，**不承诺与上游一致**。
 
 底部三个 tab 是产品结构，不是实现细节：
 
@@ -178,9 +181,9 @@ uvicorn main:app --app-dir backend --port 7800
 
 - **卡片仍是 `<a>`，`href` 是站内 hash `#job/<id>`**，不是外链。所以 `.jobcard` 样式
   一行没动，长按/右键行为照旧
-- **详情页不需要新后端接口**：`jd` 全文一直存在 `data/boss_jobs.json` 里，`/api/jobs`
+- **岗位本体不需要新后端接口**：`jd` 全文一直存在 `data/boss_jobs.json` 里，`/api/jobs`
   本来就全量返回。`cards.js` 渲染时顺手 `remember(job)` 存进内存，深链接直接命中，
-  未命中的才回落到 `/api/jobs`
+  未命中的才回落到 `/api/jobs`。（AI 解读是另一份数据，另走一个接口，见下节）
 - `job` 视图必须和 Chat 一样归入「沉浸式」（隐藏 tabbar）：否则在详情页点 Jobs tab
   会撞上 `app.js` 里「已选中就 return」的短路，卡在原地回不去
 - 后退优先交给 `history.back()`（iPhone 侧滑返回才对得上），直接粘链接进来的场景
@@ -190,6 +193,60 @@ uvicorn main:app --app-dir backend --port 7800
 - `normalize()` 原本丢弃了 `company_scale / company_stage / company_industry /
   welfare / boss_title / job_labels / skills` —— 抓取器一直在返回（`map_api_job`），
   只是没存。补上后需**重跑一次采集**才有数据，详情页对缺失字段整行跳过
+
+### AI 解读（2026-10-09）
+
+`scripts/cluster_jobs.py` 跑出的 `data/job_gaps.json`（438KB / 30 岗位 ≈ 15KB 每岗）
+接进详情页，位置在 **JD 原文之后**。
+
+**默认形态：JD 展开，解读折叠。** JD 是投递的原始依据，解读是模型的推论——
+折叠起来让用户自己决定什么时候看，而不是被推着先读一段 AI 的话。折叠头只给
+结论徽标（「长期储备」这类），点开才是完整解读。
+
+**数据通道：单岗位接口，不并入 `/api/jobs`。**
+`GET /api/jobs/{job_id}/analysis` → `{job_id, generated_at, model, analysis, target}`。
+
+- 全量 `/api/gaps` 不划算：438KB 一次性下发，且岗位刷新后解读不跟着更新。
+  单岗位约 15KB，懒加载，详情页 `render()` 后异步补进来
+- **必须带上 `target`**（`target_base` / `target_salary`）。`intent_match` 只给
+  `aligned` / `above_target` 这类状态，**没说是跟什么对齐**——不下发目标值就只能显示
+  「已对齐」这种没主语的词。前端拼成「地点符合你的意向 上海」这种整句
+- **`analysis` 原样透传，不在后端归一化**
+
+**LLM 输出的键不齐，前端一律 `??` 兜底。**
+
+| 现象 | 实测 | 处理 |
+|---|---|---|
+| `openning` 写成 `opening` | 1/30 岗位 | `a.openning ?? a.opening` |
+| `defensive_script` 有四种键变体 | 76 条**全都**带 `mitigation_angle`，其余是重复而非替代 | 只读 `mitigation_angle` |
+| `gap_details` 只有 `has_gap` | 43/293 条要求 | 缺口文案与难度都按可选渲染 |
+| 引用 JD 原文带康熙部首 | 23 处 | `deRadical` 也要过解读文本，不只 JD |
+
+**不要把这些归一化搬到后端。** 后端归一化等于把这一批的脏数据固化成 API 契约，
+重跑 cluster 后还得再改一次；放前端读时兜底，重跑即自愈。
+
+**分层：core 展开，非 core 折叠。**
+
+- 概览卡片统计**全部**要求（分母诚实），但只列 `core` 行的明细。
+  `important` / `bonus` 不影响「投不投」的判断，收进一个 `<details>`
+- 每种匹配状态一张卡，带一句「凭什么」：`已证明 / 有直接对应的经历`。
+  光有「已证明」三个字看不出是拿什么证明的。原来的 6px 细条 + 小字图例在手机上
+  很难受，四种颜色得盯着 6px 去分辨
+- **补齐行动按 `bridge_difficulty` 降序排**（难补的排前面）。行动条目通过
+  `target_gap_tag` 反查要求里的难度，两边靠这个 tag 关联
+- 折叠一律用原生 `<details>`：键盘与读屏行为免费，不需要自己写 accordion
+
+**状态色都过 4.5:1（对白底）**，小字可直接用不必再套底色：
+`#2e6b4f` 6.30 / `#a03d33` 6.54 / `#6b6259` 5.97 / `--accent` 4.71。
+
+**前端领域切分**：`job.js` 只管岗位本体与路由，`analysis.js` 只管解读渲染，
+`el` / `deRadical` / `fold` 提到 `dom.js` 共用——否则会形成
+`analysis ← job ← analysis` 的循环依赖。
+
+**未验证**：这套布局**没有在真机浏览器里看过**。已做的验证：后端经 `TestClient`
+与重启后的 7800 实测；前端用临时 DOM shim 跑通 30 个岗位（卡片数字与数据逐岗对账、
+段宽合计 100%、无 `undefined`/`[object` 泄漏、复制文案与清单一致）。
+卡片的实际视觉与折叠头箭头位置仍需真机确认。
 
 ## 约定
 
@@ -214,9 +271,18 @@ uvicorn main:app --app-dir backend --port 7800
 ## 尚未决定（不要自行假设）
 
 - Persona 的存储 schema 与 Evidence 链怎么建模
-- 接哪个 LLM 做 Persona 抽取 / Gap Analysis，以及是否流式
+- 接哪个 LLM 做 Persona 抽取 / Gap Analysis，以及是否流式。
+  （Gap Analysis 已经跑起来了，走 `common.active_chain` 的容灾链，
+  这一批 30 个岗位实际分布在 gemini-3.5-flash / glm-4.7-flash / deepseek-v4-flash
+  三个模型上——**逐岗位独立选模型，不是整个批次一个模型**。
+  解读是否流式仍未定，目前是跑批产出 JSON 文件、页面按需读文件。）
 - 前端在 Phase 1 之后是否升级为 React + Vite（引入构建链）
-- 前端形态（对话流 / Persona 面板 / Gap 列表）如何对应 README 的 MVP 五个模块
+- 前端形态（对话流 / Persona 面板 / Gap 列表）如何对应 README 的 MVP 五个模块。
+  （岗位维度的 AI 解读已接入详情页，跨岗位的 Gap 频次视图还没做——
+  `gap_canonical_tag` 是为跨岗位统计设计的，数据已经就位，界面还没有。）
+- `job_gaps.json` 的生命周期：目前**不入 git**（`.gitignore` 第 226 行 `data/`
+  整目录忽略），重跑 cluster 是全量覆盖。重跑后页面上的解读会变，要不要版本化留档未定。
+  注意这意味着**换台机器 clone 下来没有解读数据**，页面会对所有岗位显示成无解读
 
 
 ## Persona Schema（2026-10-03 定稿，**2026-10-04 已作废**）

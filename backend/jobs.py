@@ -8,7 +8,7 @@ import json
 import time
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from common import save_json_file
 from persona import TARGET_KEYS, get_persona
@@ -16,6 +16,7 @@ from persona import TARGET_KEYS, get_persona
 router = APIRouter()
 
 STORE = Path(__file__).resolve().parents[1] / "data" / "boss_jobs.json"
+GAPS = Path(__file__).resolve().parents[1] / "data" / "job_gaps.json"
 
 
 def _now() -> str:
@@ -66,7 +67,43 @@ def save_snapshot(cards: list[dict], keyword: str) -> None:
     save_json_file(STORE, json.dumps(store, ensure_ascii=False, indent=2))
 
 
+def _gaps() -> dict:
+    """{job_id: {"generated_at", "model", "analysis"}}"""
+    if not GAPS.exists():
+        return {}
+    doc = json.loads(GAPS.read_text(encoding="utf-8"))
+    at = doc.get("generated_at", "")
+    # 带上跑这一批时的求职意向：intent_match 只说 aligned/above_target，
+    # 没有目标值就说不出"对齐到什么"，前端得自己知道 25k-30k / 上海 才对得上。
+    persona = doc.get("persona", {})
+    target = {
+        "target_base": persona.get("target_base", ""),
+        "target_salary": persona.get("target_salary", ""),
+        "target": persona.get("target", []),
+    }
+    return {
+        r["job"]["id"]: {
+            "generated_at": at,
+            "model": r.get("model", ""),
+            "analysis": r.get("analysis", {}),
+            "target": target,
+        }
+        for r in doc.get("results", [])
+    }
+
+
 @router.get("/api/jobs")
 def list_jobs() -> dict:
     store = _load()
     return {"updated_at": store["updated_at"], "jobs": list(store["jobs"].values())}
+
+
+@router.get("/api/jobs/{job_id}/analysis")
+def job_analysis(job_id: str) -> dict:
+    """单个岗位的 cluster 解读。analysis 原样透传，不在这里补字段：
+    这一批 LLM 输出的键并不齐（openning/opening、defensive_script 三种变体、
+    部分 gap_details 只有 has_gap），归一化放前端读时兜底，重跑就能自愈。"""
+    row = _gaps().get(job_id)
+    if not row:
+        raise HTTPException(404, "该岗位暂无 AI 解读")
+    return {"job_id": job_id, **row}

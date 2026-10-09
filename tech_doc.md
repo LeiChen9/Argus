@@ -141,7 +141,9 @@ uvicorn main:app --app-dir backend --port 7800
 用 Cloudflare Tunnel 把本机 7800 暴露出去。
 
 - 临时预览：`cloudflared tunnel --url http://localhost:7800`（免登录，地址每次变）
-- 正式：`cloudflared tunnel login` → 建 tunnel → 绑自有域名 → 常驻运行
+- 固定入口（免买域）：`worker-proxy` Worker 固定 `https://argus-proxy.luent-hat.workers.dev` 转发到 `*.trycloudflare.com` 源；`cloudflared tunnel --url` 重启换 URL 后需更新 `worker-proxy/worker.js` 的 `ORIGIN` 并重部署
+- 一键重绑：`./scripts/restart.sh` 起 7800 + 拉新 quick URL + `wrangler deploy --cwd worker-proxy` + 校验 `worker /api/jobs` 30 条；固定域重启不变，临时域会变
+- 正式（需自有域）：`cloudflared tunnel login` → 建 tunnel → 绑自有域名 → 常驻运行
 - `cloudflared` 用 homebrew 装；`cert.pem` 缺失时 `tunnel list` 会报错，
   需要重新 `tunnel login`（FluentChat 走 wrangler，不共用这份授权）。
 

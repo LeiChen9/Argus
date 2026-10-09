@@ -229,3 +229,4 @@ boss_recommendations_*.md
 # Argus: nohup 起的 uvicorn 落在这里，是日志不是源码
 nohup.out
 /data/boss_jobs.json
+worker-proxy/.wrangler/

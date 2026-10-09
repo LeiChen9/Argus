@@ -3,7 +3,7 @@
 已达成共识的技术选型。**只记已确定的选择和决策理由**，不记实现细节、不记待办。
 进度与踩坑记录写 `dev_log.md`。
 
-Last updated: 2026-10-08
+Last updated: 2026-10-09
 
 ---
 
@@ -22,30 +22,45 @@ Last updated: 2026-10-08
 |---|---|---|
 | Backend | **Python + FastAPI** | 用户指定 Python（熟悉）。FastAPI 自动出 `/docs`，Pydantic 类型化便于后续接 LLM 流式响应。 |
 | Frontend | **静态 HTML + 原生 JS** | 无构建步骤、无 node 工具链进应用路径。改完刷新即见，Phase 1 迭代最快。 |
-| Storage | **SQLite，走 stdlib `sqlite3`，不上ORM** | 单用户单进程，慢的是 LLM 不是 DB。零新依赖。`.gitignore` 已忽略 `db.sqlite3`。 |
+| Storage | **JSON 文件，无 DB、无 ORM** | 单用户单进程，慢的是 LLM 不是存储。`data/boss_jobs.json`（岗位覆盖快照）+ `backend/persona.json`（简历解析结果），都在 `.gitignore` 里 |
 | LLM Provider | 智谱 `zhipu_realtime`，key 在 `.env` | `.env` 已被 gitignore；`.env` 不入库。 |
 
-### Storage 已知债务
+### Storage 说明
 
-裸 `sqlite3` 意味着**方言绑定**。将来若换 Postgres，以下都要重写：
-`AUTOINCREMENT`、`?` 占位符、类型声明、以及每一个拼接出来的查询字符串。
+早期 tech_doc 写的是 SQLite，那是**计划**不是现状：`backend/` 里没有任何 `sqlite3`
+引用，`db.sqlite3` 的 gitignore 条目是那份计划留下的残留。
 
-这是**明确接受的债务**，不是疏漏。换库的前提条件是：先引入 ORM 做一次集中迁移。
-在债务兑现前，不要写 ORM 也不要提前抽象 DAL —— 按需引入。
+岗位数据物理含义是**覆盖快照**而非追加（`save_snapshot` 按 id 去重合并，新批次覆盖
+旧值），写入时过滤掉 `jd` 为空的岗位。数据量级是几十条，`/api/jobs` 全量返回前端，
+没有分页。真的到需要分页或并发写的那天再谈迁移，不要提前抽象 DAL。
 
 ## Layout
 
 ```
 backend/
-  main.py                      FastAPI app
+  main.py                      FastAPI app + no-store 中间件
+  chat.py                      /api/chat Agent 循环、/api/persona*
+  jobs.py                      /api/jobs、normalize、save_snapshot
+  crawler.py                   BOSS CDP 采集 + 猎聘回退
+  persona.py                   简历解析与 Persona 落盘
+  common.py                    .env 读取、LLM 容灾链、markdown 渲染
+  me.py                        /api/me 占位
   static/
     index.html                 由 FastAPI StaticFiles 直接 serve
     css/app.css                设计系统，移植自 FluentChat
-    js/app.js                  tab 切换 + 招呼语注入 + 引入 chat.js
+    js/app.js                  tab 切换 + 招呼语注入 + 引入 chat.js + initJobDetail
     js/chat.js                 气泡渲染 / 调 /api/chat / 上传 chip
+    js/jobs.js                 Jobs 页拉 /api/jobs
+    js/cards.js                岗位卡片（Chat 横滑轨道与 Jobs 网格共用）
+    js/job.js                  岗位详情：hash 路由 + 渲染
+    js/nav.js                  视图切换 + 返回来源记忆
     js/greeting.js             时段×星期招呼语
     assets/argus-anime.jpeg    NPC 源图（用户设计）
     assets/argus-anime.webp    带 alpha，页面实际使用
+worker-proxy/
+  worker.js                    公网入口，读 KV 得上游地址
+  wrangler.jsonc               KV binding
+scripts/restart.sh             起本机 + 拉 tunnel + 写 KV + 校验
 tech_doc.md         本文件
 dev_log.md          开发日志
 ```
@@ -60,7 +75,7 @@ dev_log.md          开发日志
 | Tab | 职责 | 状态 |
 |---|---|---|
 | **Chat** | 更新 Persona 的地方 | 已做：WhatsApp 式气泡 + composer + 上传按钮 |
-| **Jobs** | 爬虫找到的求职意向下的活跃岗位聚类 | placeholder，爬虫未接 |
+| **Jobs** | 爬虫找到的求职意向下的活跃岗位聚类 | 已做：拉 `/api/jobs` 渲染卡片网格，点开进站内详情页 |
 | **Me** | 个人资料与设置 | placeholder |
 
 ### NPC 资产：JPEG 必须转带 alpha 的 webp
@@ -140,16 +155,49 @@ uvicorn main:app --app-dir backend --port 7800
 不做 Workers 迁移（FastAPI + 本地文件存储 + 本机浏览器探针跑不上 Workers），
 用 Cloudflare Tunnel 把本机 7800 暴露出去。
 
-- 临时预览：`cloudflared tunnel --url http://localhost:7800`（免登录，地址每次变）
-- 固定入口（免买域）：`worker-proxy` Worker 固定 `https://argus-proxy.luent-hat.workers.dev` 转发到 `*.trycloudflare.com` 源；`cloudflared tunnel --url` 重启换 URL 后需更新 `worker-proxy/worker.js` 的 `ORIGIN` 并重部署
-- 一键重绑：`./scripts/restart.sh` 起 7800 + 拉新 quick URL + `wrangler deploy --cwd worker-proxy` + 校验 `worker /api/jobs` 30 条；固定域重启不变，临时域会变
-- 正式（需自有域）：`cloudflared tunnel login` → 建 tunnel → 绑自有域名 → 常驻运行
+**入口域名是固定的，不随重启变**：`https://argus-proxy.luent-hat.workers.dev`
+（workers.dev 子域，账号自带，免费，不需要买域名）。变的只有它背后的上游地址。
+
+- 链路：`固定 workers.dev 域名` → `argus-proxy Worker` →（读 KV 得地址）→ `cloudflared --url` 随机 `*.trycloudflare.com` → `localhost:7800`
+- **上游地址存 KV（`ORIGIN_KV` 绑定），不写死在 `worker.js`。** 换上游 = 写一次 KV，
+  **不需要 `wrangler deploy`**。这是本方案能免域名的原因
+- 一键重绑：`./scripts/restart.sh` = 起 7800 + 拉新 quick URL + 探测可达 + 写 KV + 校验公网 30 条。任何一步失败都在写 KV 之前退出，线上代码不受影响
+- `cloudflared --url` 拿不到地址时**必须整段放弃**。早期版本继续往下走，`sed` 把
+  `ORIGIN` 洗成空串并部署上线，公网入口直接瘫，且报错发生在好几步之后
+- 探测和校验走 `http://127.0.0.1:8118` 代理：直连 trycloudflare 在本地网络下常超时，
+  用直连当判据会把好隧道误杀
+- **已知做不到（2026-10-09 实测）**：不买域名无法让 Worker 直连 named tunnel。
+  `UUID.cfargotunnel.com` 返回 403/1102（该子域只代理同账户内的 DNS 记录），
+  Workers VPC 绑定 tunnel 在本账户报 10002。免域名的稳定上游只有 KV 这条路
 - `cloudflared` 用 homebrew 装；`cert.pem` 缺失时 `tunnel list` 会报错，
-  需要重新 `tunnel login`（FluentChat 走 wrangler，不共用这份授权）。
+  需要重新 `tunnel login`（FluentChat 走 wrangler，不共用这份授权）
+
+## 岗位详情（2026-10-09）
+
+卡片点开进站内详情页，投递才是唯一离开本站的动作。
+
+- **卡片仍是 `<a>`，`href` 是站内 hash `#job/<id>`**，不是外链。所以 `.jobcard` 样式
+  一行没动，长按/右键行为照旧
+- **详情页不需要新后端接口**：`jd` 全文一直存在 `data/boss_jobs.json` 里，`/api/jobs`
+  本来就全量返回。`cards.js` 渲染时顺手 `remember(job)` 存进内存，深链接直接命中，
+  未命中的才回落到 `/api/jobs`
+- `job` 视图必须和 Chat 一样归入「沉浸式」（隐藏 tabbar）：否则在详情页点 Jobs tab
+  会撞上 `app.js` 里「已选中就 return」的短路，卡在原地回不去
+- 后退优先交给 `history.back()`（iPhone 侧滑返回才对得上），直接粘链接进来的场景
+  `history.state` 为 null，降级为记住来源视图的 `nav.back()`
+- **JD 有康熙部首乱码**（`建⽴⽬标`），是抓取器字体解码的产物。只对命中的码位段做
+  NFKC，**不能整串 NFKC** —— 那会把全角逗号也压成半角
+- `normalize()` 原本丢弃了 `company_scale / company_stage / company_industry /
+  welfare / boss_title / job_labels / skills` —— 抓取器一直在返回（`map_api_job`），
+  只是没存。补上后需**重跑一次采集**才有数据，详情页对缺失字段整行跳过
 
 ## 约定
 
 - `StaticFiles` mount在 `/` **必须放在所有 API 路由声明之后**，否则会遮蔽它们。
+- **静态资源一律 `Cache-Control: no-store`**（`main.py` 中间件）。不设这个头时浏览器
+  会用 `Last-Modified` 做启发式缓存：文件刚改过（Last-Modified 是几分钟前）就仍算
+  「新鲜」而继续跑旧 JS，PWA 模式下 Safari 判得更松，改完前端不生效只能强刷。
+  自用开发机，牺牲缓存换「改完刷新就是新的」
 - 前端所有 API 调用走相对路径 `/api/...`，由同一个 FastAPI 进程 serve，无需 CORS、无需 dev server 代理。
 - **改 JS 后必须做模块图可达性检查**：`index.html` 只加载 `js/app.js`，
   其余模块靠 import 链到达。裸副作用导入 `import "./x.js"`（没有 `from`）

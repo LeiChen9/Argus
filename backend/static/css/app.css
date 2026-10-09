@@ -627,6 +627,144 @@ button { font: inherit; color: inherit; }
 }
 .jobs__grid .jobcard { flex: initial; }
 
+/* ── 岗位详情 ── */
+.view--job { display: block; }
+
+.jdetail {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.jdetail__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 12px;
+  border-bottom: 0.5px solid var(--hairline);
+  background: var(--bar-bg);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+}
+
+.jdetail__back {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.jdetail__back:active { opacity: .6; }
+.jdetail__back svg { width: 22px; height: 22px; }
+
+.jdetail__htitle {
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.jdetail__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 18px 18px 28px;
+}
+
+.jdetail__title {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.32;
+  letter-spacing: -0.02em;
+}
+
+.jdetail__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  margin: 8px 0 0;
+}
+.jdetail__salary { font-size: 16px; font-weight: 600; color: var(--accent); }
+.jdetail__company { font-size: 14px; color: var(--ink-2); }
+
+.jdetail__rows {
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border: 0.5px solid var(--hairline);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.jdetail__row {
+  display: flex;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.jdetail__row + .jdetail__row { border-top: 0.5px solid var(--hairline); }
+
+.jdetail__label {
+  flex: 0 0 72px;
+  color: var(--ink-3);
+}
+.jdetail__val { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+
+.jdetail__chips {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.jchip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bubble-me);
+  color: var(--on-bubble);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.6;
+}
+
+/* 抓取来的 JD 是纯文本，pre-wrap 保住原有换行与缩进 */
+.jdetail__jd {
+  margin: 18px 0 0;
+  font-family: inherit;
+  font-size: 14.5px;
+  line-height: 1.68;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.jdetail__cta {
+  flex: 0 0 auto;
+  margin: 0 18px calc(18px + env(safe-area-inset-bottom));
+  padding: 13px 18px;
+  border-radius: 13px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+}
+.jdetail__cta:active { opacity: .82; }
+
 /* ── Reduced motion ── */
 @media (prefers-reduced-motion: reduce) {
   .hero::before,

@@ -42,6 +42,15 @@ def normalize(raw: dict, source: str) -> dict:
         "jd": raw.get("jd", ""),
         "skill_tags": raw.get("skill_tags", []),
         "boss_active_status": raw.get("boss_active_status", ""),
+        # 下面这些 map_api_job 一直在返回，只是此前没存，详情页用得上
+        "boss_title": raw.get("boss_title", ""),
+        "company_scale": raw.get("company_scale", ""),
+        "company_stage": raw.get("company_stage", ""),
+        "company_industry": raw.get("company_industry", ""),
+        "job_labels": raw.get("job_labels", ""),
+        "skills": raw.get("skills", ""),
+        "welfare": raw.get("welfare", ""),
+        "company_link": raw.get("company_link", ""),
     }
 
 
@@ -55,10 +64,6 @@ def save_snapshot(cards: list[dict], keyword: str) -> None:
     }
     STORE.parent.mkdir(exist_ok=True)
     save_json_file(STORE, json.dumps(store, ensure_ascii=False, indent=2))
-
-
-def save_batch(cards: list[dict], keyword: str) -> None:
-    return save_snapshot(cards, keyword)
 
 
 @router.get("/api/jobs")

@@ -6,12 +6,11 @@
 
 import json
 import logging
-import re
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from common import MODEL_CHAIN, render_markdown, call_llm
+from common import render_markdown, call_llm
 from persona import get_persona, init_persona_from_text, read_upload, save_targets
 from crawler import fetch_liepin_html, parse_jobs, fetch_boss_recommendations, fetch_boss_details
 from jobs import normalize, save_snapshot

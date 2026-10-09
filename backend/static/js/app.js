@@ -1,7 +1,10 @@
 import { greeting } from "./greeting.js";
 import { go } from "./nav.js";
 import { loadJobs } from "./jobs.js";
+import { initJobDetail } from "./job.js";
 import "./chat.js";
+
+initJobDetail();
 
 const el = document.getElementById("greeting");
 

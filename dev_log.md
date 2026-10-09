@@ -404,3 +404,92 @@ SQLite 单行 JSON 列 + `schema_version`。落库时按上面第 2 条显式检
 ## 2026-10-05 — Boss 直聘受限，暂切猎聘
 
 Boss 7 链路全验封：`web/geek/job`/`c101020100`→8k SPA 壳/10k 登录重定向，`premium+render`→44k 安全验证滑块页，`wapi`→`{"code":37,"zpData":{"seed":...}}`，`ultra_premium`→403 `plan not allow`。已试 `wait_for`/`session_number`/`keep_headers` 均同。ScraperAPI 当前破不了 zpData。已验 `猎聘 Liepin premium+render 196k → LLM 8条` 可 work（`上海 数据分析`）。当前 crawler 仅猎聘为实际可用源，Boss 暂停但保留 TODO（见 `crawler.py:TODO Boss`）。证据 `/tmp/boss_html/*` `/tmp/boss_deep*.log`。
+
+---
+
+## 2026-10-09 — 岗位详情页 + 公网入口免域名化
+
+### 岗位详情页（纯前端，后端零改动）
+
+卡片点开不再跳 boss直聘，改进站内详情页，投递才是唯一离开本站的动作。
+
+**关键前提：`jd` 全文一直存在 `data/boss_jobs.json` 里。** 30 个岗位 JD 长度
+263–1151 字，含「职位描述 + 职位要求」，一个不缺，`/api/jobs` 本来就全量返回。
+所以详情页不需要任何新后端接口 —— 一开始就按这个前提设计，省掉了整个 endpoint。
+
+- `cards.js`：`a.href` 从 `job.link` 改成 `#job/<id>`，去掉 `target="_blank"`。
+  **元素仍是 `<a>`**，所以 `.jobcard` 的样式一行没动，长按/右键行为照旧。
+  渲染时顺手 `remember(job)` 存内存，深链接直接命中，未命中的才回落 `/api/jobs`
+- `job.js`（新）：hash 路由 + 渲染。详情展示标题/薪资/公司/地点/要求/技能标签/
+  公司规模/融资阶段/行业/福利/HR/HR活跃/来源/采集时间 + JD 全文 + 底部固定投递按钮
+- `nav.js`：加了 `last` 记住详情页的来源视图，详情页归入「沉浸式」和 Chat 一起
+  隐藏 tabbar。**这一步不是可选的**：不隐藏的话，在详情页点 Jobs tab 会撞上
+  `app.js` 里「已选中就 return」的短路，直接卡死
+- `main.py`：`normalize()` 补 8 个字段（`company_scale`/`company_stage`/
+  `company_industry`/`welfare`/`boss_title`/`job_labels`/`skills`/`company_link`）。
+  抓取器一直在返回这些（`boss_cdp_raw.py:614-649`），只是没存。**要重跑采集才有数据**
+
+**JD 康熙部首乱码**：抓取器的字体解码把常用字还原成 `⽬⽤⾏⼯` 之类（`建⽴⽬标`）。
+修法是对命中的码位段逐字 NFKC，**不能整串 NFKC** —— 那会把全角逗号也压成半角。
+实测 30 个岗位全覆盖，全角标点数量前后一致。
+
+### 踩坑：正则字面量被编辑器吞成反向区间
+
+写 `/[⺀-⿿　-⿟...]/` 时 IDE 把 `⺀`(2E80) 和 `⺁`(2E81) 之间的字符规范化了，
+落盘变成 `3000-2FDF` —— **反向区间，静默失效**。改用显式 `new RegExp("\\u2E80-...")`
+构造。教训：CJK 码位区间不要写字面量。
+
+### 踩坑：静态资源没 Cache-Control，前端改动不生效
+
+「改了还是跳 boss直聘」，查下来代码是对的 —— 公网 `cards.js` 实拉确认第 11 行已是
+`a.href = "#job/..."`。真因是静态资源**没有 `Cache-Control`**，浏览器用 `Last-Modified`
+做启发式缓存：文件刚改过（Last-Modified 是十几分钟前）就仍算「新鲜」而继续跑旧副本。
+应用还是 PWA（`apple-mobile-web-app-capable`），Safari 判得更松。
+
+`main.py` 加中间件给所有响应打 `no-store`。这类问题的排查顺序应该是：
+**先 `curl` 公网实拉目标文件**，确认服务端是新的，再怀疑缓存。
+
+### 公网入口：不再需要每次重启重新部署
+
+`https://argus-proxy.luent-hat.workers.dev` 是 workers.dev 子域，账号自带、免费、
+**本来就固定**。不稳的是它背后的上游 —— `cloudflared --url` 每次随机，所以旧
+`restart.sh` 必须每次 `wrangler deploy` 把新地址 `sed` 进 `worker.js`。
+
+**改成上游地址存 KV**（`ORIGIN_KV` binding）。换上游 = 写一次 KV，不部署。
+实测 `wrangler deployments list` 确认换上游后没有新增部署，而公网照常返回。
+
+这同时消掉了最危险的那个失败模式：旧脚本部署中途失败会把 `ORIGIN` 洗成空串并推上线，
+公网入口直接瘫（这次真发生过）。KV 写失败则线上代码毫发无损。
+
+`restart.sh` 现在任何一步失败都在写 KV 之前退出：`--url` 拿不到地址就整段放弃；
+探测可达后才 `sed` + deploy。注意探测要走 `127.0.0.1:8118` 代理 —— 直连 trycloudflare
+在本地网络下几乎必超时，拿它当判据会把好隧道误杀。
+
+### 研究：为什么免不了 named tunnel 的稳定上游
+
+用户想要「本机当引擎 + 稳定域名」。稳定域名**已经有了**，缺的是稳定上游。三条路都实测过：
+
+| 方案 | 结果 |
+|---|---|
+| Worker → quick tunnel（旧） | 能用，但每次重启要部署 |
+| Worker → `UUID.cfargotunnel.com` | **403 / 1102**，文档说该子域只代理同账户内的 DNS 记录 |
+| Worker → VPC Networks 绑 tunnel | wrangler 报 **10002**，本账户不可用 |
+| Cloudflare free subdomain | **产品不存在**，`/accounts/{id}/subdomain` 返回 `7003` |
+
+结论：不买域名无法让 Cloudflare 边缘把流量送进隧道 —— 卡点是需要一个 DNS 记录。
+KV 是免费额度内唯一能消除重新部署的路径。
+
+### 顺手清理
+
+- `chat.py`：删未用的 `import re` 和 `MODEL_CHAIN`
+- `jobs.py`：删无人调用的 `save_batch`（`save_snapshot` 的转发别名）
+- `tech_doc.md`：Storage 那节原写 SQLite，但 `backend/` 里没有任何 `sqlite3` 引用，
+  那是早期计划不是现状，已改为 JSON 文件并说明覆盖快照语义；Layout 补齐 6 个新文件；
+  Jobs tab 状态从「爬虫未接」更新
+
+### 未完成
+
+- `example.com` 这个 zone 要删（IANA 保留域名，状态永远 `pending`）。OAuth token 只有
+  `zone:read`，无 `zone:delete`，API 删不掉（9109），需手动在 dashboard 删
+- KV 是最终一致，刚写完有几秒读到旧值。`restart.sh` 末尾重试 8 次 × 4s 兜底，
+  实测一次过，弱网下 32s 够不够没验证

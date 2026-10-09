@@ -1,5 +1,11 @@
 {
   "name": "argus-proxy",
   "main": "worker.js",
-  "compatibility_date": "2026-10-09"
+  "compatibility_date": "2026-10-09",
+  "kv_namespaces": [
+    {
+      "binding": "ORIGIN_KV",
+      "id": "7bc5e29939c644beae3d8c1d9fa6d346"
+    }
+  ]
 }

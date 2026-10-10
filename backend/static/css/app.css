@@ -561,6 +561,28 @@ button { font: inherit; color: inherit; }
 .jobs__meta { margin: 0 0 12px; font-size: 13px; color: var(--ink-3); }
 .jobs__grid .placeholder__note { grid-column: 1 / -1; text-align: center; }
 
+/* ── Career 页 ── */
+.view--career {
+  display: block;
+  overflow-y: auto;
+  padding: 18px 18px 40px;
+}
+/* 族卡片：沿用 jobcard 的白底+发丝边+投影，卡片层叠靠这条边和 12px 间距 */
+.fam { padding: 14px 16px 12px; border: 0.5px solid var(--hairline); border-radius: 14px; background: #fff; box-shadow: 0 1px 4px rgba(58, 46, 34, 0.06); }
+.fam + .fam { margin-top: 12px; }
+.fam__name { margin: 0 0 6px; font-size: 16px; font-weight: 700; color: var(--ink); }
+.fam__pos, .fam__crit { margin: 0 0 8px; font-size: 13px; line-height: 1.6; color: var(--ink-2); }
+.fam__crit { color: var(--ink-3); }
+.fam__cap { padding: 8px 0; border-top: 0.5px solid var(--hairline); }
+.fam__capn { font-size: 13.5px; }
+.fam__lvl { margin-right: 6px; padding: 1px 6px; border-radius: 5px; font-size: 11px; font-style: normal; }
+.fam__lvl.is-core { color: #2e6b4f; background: rgba(46, 107, 79, .12); }
+.fam__lvl.is-important { color: var(--accent); background: var(--glow); }
+.fam__lvl.is-bonus { color: var(--ink-2); background: var(--glow); }
+.fam__ev { margin: 4px 0 0; font-size: 12px; line-height: 1.55; color: var(--ink-3); }
+/* 岗位轨道嵌在族卡片的折叠里，复用 cards.js 的横滑轨道，只补一条上间距 */
+.view--career .jobcards { margin-top: 10px; }
+
 /* ── 岗位卡片：Chat 气泡内横滑轨道，Jobs 页直接排网格 ── */
 .jobcards {
   display: flex;

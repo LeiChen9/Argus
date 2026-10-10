@@ -130,6 +130,8 @@ persona 是用户**自己上传的、他觉得做得好的项目集合**。它�
 ## 4. 数据现状
 
 - `data/boss_jobs.json` — 30 个岗位，覆盖快照，仅保留带 `jd` 的开放岗
+- `data/job_families.json` — S1 产物：6 个岗位族，每族带定位、归族判据、能力要求与成员岗位。
+  由 `scripts/build_families.py` 生成，**人可编辑**，Career 页直接读它展示（见 `tech_doc.md`）
 - `data/job_gaps.json` — 30 条单岗位 × persona 的分析（legacy）。
   新框架里 S2 取代它，但 `requirements_deep_dive` 可作 S1 的参考输入
 

@@ -40,18 +40,19 @@ Last updated: 2026-10-09
 backend/
   main.py                      FastAPI app + no-store 中间件
   chat.py                      /api/chat Agent 循环、/api/persona*
-  jobs.py                      /api/jobs、/api/jobs/{id}/analysis、normalize、save_snapshot
+  jobs.py                      /api/jobs、/api/jobs/{id}/analysis、/api/families、normalize、save_snapshot
   crawler.py                   BOSS CDP 采集 + 猎聘回退
   persona.py                   简历解析与 Persona 落盘
   common.py                    .env 读取、LLM 容灾链、markdown 渲染
   me.py                        /api/me 占位
   static/
     index.html                 由 FastAPI StaticFiles 直接 serve
-    css/app.css                设计系统，移植自 FluentChat；含岗位详情与 AI 解读段
+    css/app.css                设计系统，移植自 FluentChat；含岗位详情、AI 解读与 Career 段
     js/app.js                  tab 切换 + 招呼语注入 + 引入 chat.js + initJobDetail
     js/chat.js                 气泡渲染 / 调 /api/chat / 上传 chip
     js/jobs.js                 Jobs 页拉 /api/jobs
-    js/cards.js                岗位卡片（Chat 横滑轨道与 Jobs 网格共用）
+    js/family.js               Career 页拉 /api/families，渲染岗位族卡片
+    js/cards.js                岗位卡片（Chat 横滑轨道、Jobs 网格、Career 族内轨道共用）
     js/job.js                  岗位详情：hash 路由 + 岗位本体渲染 + 拉解读
     js/analysis.js             AI 解读渲染：结论、要求拆解、面试打法、补齐行动
     js/dom.js                  el / deRadical / fold，job.js 与 analysis.js 共用
@@ -73,12 +74,13 @@ dev_log.md          开发日志
 （首页 + Chat + tabbar）与上游逐字节相同，回上游取改动时 `diff` 一下就知道我们改过哪。
 往后追加的段落（岗位详情、AI 解读）是我们自己的，**不承诺与上游一致**。
 
-底部三个 tab 是产品结构，不是实现细节：
+底部四个 tab 是产品结构，不是实现细节：
 
 | Tab | 职责 | 状态 |
 |---|---|---|
 | **Chat** | 更新 Persona 的地方 | 已做：WhatsApp 式气泡 + composer + 上传按钮 |
 | **Jobs** | 爬虫找到的求职意向下的活跃岗位聚类 | 已做：拉 `/api/jobs` 渲染卡片网格，点开进站内详情页 |
+| **Career** | 把活跃岗位收敛成岗位族（`workflow.md` S1） | 已做：拉 `/api/families` 渲染族卡片，族内岗位横滑轨道 |
 | **Me** | 个人资料与设置 | placeholder |
 
 ### NPC 资产：JPEG 必须转带 alpha 的 webp
@@ -329,6 +331,69 @@ pkill -f "scripts/watchdog.sh"                            # 停
 与重启后的 7800 实测；前端用临时 DOM shim 跑通 30 个岗位（卡片数字与数据逐岗对账、
 段宽合计 100%、无 `undefined`/`[object` 泄漏、复制文案与清单一致）。
 卡片的实际视觉与折叠头箭头位置仍需真机确认。
+
+## Career 页（2026-10-10）
+
+把 S1 的产物 `data/job_families.json`（`workflow.md` §2）摆到站上。它是**岗位侧**
+的产物——族定义与 `job_id → family` 映射，不读 persona，与人无关。
+
+### 布局：常驻三行 + 两个默认折叠
+
+每族一张白卡（沿用 `.jobcard` 的发丝边 + 投影语汇），卡内：
+
+```text
+经营分析 · 6 个岗位                          ← 族名
+承接企业或事业部（BU）战略规划，围绕营收…    ← positioning，常驻
+岗位职责以经营目标拆解（营收/利润/OKR）…      ← membership_criteria，常驻
+  ▸ 能力要求 4 条     （徽章分级 + JD 原文）   ← 默认折叠
+  ▸ 岗位 6 个          （横滑轨道）            ← 默认折叠
+```
+
+**定位与判据必须常驻。** 它俩是判断「这些岗位是不是一族」的唯一依据，藏进折叠里
+等于没写；能力清单和岗位列表是查表用的，默认全收，页面首屏能纵览六族。
+
+能力按 `core / important / bonus` 三级上色，配色沿用 AI 解读的绿/金/灰，
+每条带 `jd_evidence` 原文——族定义是人可编辑的地基，得能对着 JD 核对。
+
+### 三个决定
+
+- **族内岗位复用 `cards.js` 的 `jobCards()`**，零新组件。`jobCard()` 内部会
+  `remember(job)`，所以在 Career 页点卡片进 `#job/<id>` 后，`job.js` 的详情页直接
+  命中内存，返回时 `nav.js` 的 `last` 记住来源是 `career`，往返正常
+- **不做 hash 路由**。族只有一层，六张卡一屏装得下，加 `#family/<id>` 只会多一套
+  返回栈和一份导航状态——`nav.js` 的沉浸式分支（`chat` / `job`）也跟着变复杂。
+  折叠用 `dom.js` 的 `fold()`（原生 `<details>`），键盘和读屏免费
+- **接口放在 `jobs.py` 而非新建 `families.py`**：路由已在 `main.py` 注册好，
+  `data/job_families.json` 本就是岗位侧产物，归 jobs 域说得通
+
+### 后端要回填岗位
+
+`families[].jobs[]` 里只有 `job_id / company / title / belongs_note`，**缺
+`salary` / `location` / `source` / `collected_at`**，直接喂 `jobCard()` 会得到空薪资、
+空 meta、`href` 变成 `#job/`。`/api/families` 因此按 id 回填 `boss_jobs` 的完整岗位：
+
+```python
+{**j, **jobs.get(j["job_id"], {}), "id": j["job_id"]}
+```
+
+族内的 company/title 在**前**、快照的在**后**，于是快照更新时以快照为准；
+岗位已从新快照消失时回落到族内那份，页面显示的是仍然存在的岗位而不是 `None`。
+
+### 两个空态要分开
+
+`res.ok` 为假（后端没重启，接口 404）和 `families` 为空（还没跑过 S1）是两回事，
+必须给不同文案。曾经 404 时页面显示「还没跑过 S1」——S1 明明跑过，文件就在
+`data/` 里躺着，那是在骗人。
+
+**前端跟着后端的版本走**：`StaticFiles` 每次从磁盘读，改完前端刷新就生效；
+但 Python 改动**必须重启 uvicorn**，否则接口还是旧的 404。
+
+### 已知取舍
+
+- 返回的族成员里 `job_id` 与 `id` 重复透传。跟 `jobs.py` 里 `_gaps()` 的既有写法
+  一致，为省一次清洗没去掉
+- 页面不显示 `belongs_note`（某岗位为何属于本族）。它是 S1 唯一解释 title 与实际
+  职能不符的地方，核对价值最高，但现在只在 API 里。族内岗位多了会挤，先不做
 
 ## 约定
 

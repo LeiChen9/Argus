@@ -95,6 +95,13 @@
       </div>
     </section>
 
+    <!-- ── Career：岗位族地图（S1 产物，scripts/build_families.py 生成） ── -->
+    <section class="view view--career" id="view-career" hidden>
+      <div class="placeholder">
+        <p class="placeholder__note">还没跑过 S1，去项目根跑一次 build_families.py</p>
+      </div>
+    </section>
+
     <!-- ── Me（接下来做） ── -->
     <section class="view view--center" id="view-me" hidden>
       <div class="placeholder">
@@ -122,6 +129,15 @@
         <circle cx="20.5" cy="8.5" r="2.2" fill="currentColor" opacity=".32"/>
       </svg>
       <span>Jobs</span>
+    </button>
+
+    <button class="tab" role="tab" data-view="career" aria-selected="false" aria-controls="view-career">
+      <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
+        <circle cx="14" cy="14" r="9.9" stroke="currentColor" stroke-width="1.7" opacity=".28"/>
+        <path d="M20.6 7.4 14 14 7.4 20.6 12.6 12.6Z" fill="currentColor" opacity=".45"/>
+        <path d="M20.6 7.4 14 14 12.6 12.6Z" fill="currentColor"/>
+      </svg>
+      <span>Career</span>
     </button>
 
     <button class="tab" role="tab" data-view="me" aria-selected="false" aria-controls="view-me">

@@ -1,6 +1,7 @@
 import { greeting } from "./greeting.js";
 import { go } from "./nav.js";
 import { loadJobs } from "./jobs.js";
+import { loadCareer } from "./family.js";
 import { initJobDetail } from "./job.js";
 import "./chat.js";
 
@@ -25,5 +26,6 @@ for (const tab of document.querySelectorAll(".tab")) {
     if (tab.getAttribute("aria-selected") === "true") return;
     go(tab.dataset.view);
     if (tab.dataset.view === "jobs") loadJobs();
+    if (tab.dataset.view === "career") loadCareer();
   });
 }

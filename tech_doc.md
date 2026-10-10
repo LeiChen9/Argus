@@ -169,11 +169,68 @@ uvicorn main:app --app-dir backend --port 7800
   `ORIGIN` 洗成空串并部署上线，公网入口直接瘫，且报错发生在好几步之后
 - 探测和校验走 `http://127.0.0.1:8118` 代理：直连 trycloudflare 在本地网络下常超时，
   用直连当判据会把好隧道误杀
+- **改 KV 是自动的**，在 `restart.sh` 里，拿地址 → 验隧道 → 写 KV → 验公网一条龙。
+  手动改只在脚本**中途失败**时才需要（它会在写 KV 前退出，此时线上仍指向旧上游）
+- **`workers.dev` 在本地网络下 DNS 被污染**：直连解析到 `157.240.7.8`（Facebook 的段），
+  `dig @1.1.1.1` / `@8.8.8.8` 给的也全是假地址。`cloudflare.com` / `trycloudflare.com`
+  解析正常，只有 `workers.dev` 整个域被污染。所以**本机直连公网入口必然失败**，
+  是网络环境问题不是代码问题，换网络（手机热点）即可。验证一律走 8118 代理
+
 - **已知做不到（2026-10-09 实测）**：不买域名无法让 Worker 直连 named tunnel。
   `UUID.cfargotunnel.com` 返回 403/1102（该子域只代理同账户内的 DNS 记录），
   Workers VPC 绑定 tunnel 在本账户报 10002。免域名的稳定上游只有 KV 这条路
 - `cloudflared` 用 homebrew 装；`cert.pem` 缺失时 `tunnel list` 会报错，
   需要重新 `tunnel login`（FluentChat 走 wrangler，不共用这份授权）
+
+### 隧道注册失败（2026-10-10 实测）
+
+公网入口 530 = Worker 活着但取不到上游，往下查是隧道本身没建立。两种错要分清：
+
+| 现象 | 含义 |
+| --- | --- |
+| `Unauthorized: Tunnel not found`（循环重试） | 拿到 URL 了但**注册没成功**，隧道不存在 |
+| `failed to request quick Tunnel: context deadline exceeded` | 连 quick tunnel 都没申请到 |
+
+第二种是**间歇性**的，不是配置问题：手工发同样的
+`POST https://api.trycloudflare.com/tunnel` 每次都成功、耗时 4–5 秒，
+延迟偏高，`cloudflared` 的等待窗口偶尔就错过。**重试即可，通常第 2 次就通。**
+实测一轮 `restart.sh` 三次全超时、手动重试第 1 次就成了——这个随机性只能靠重试缓解，
+根治要换 named tunnel，而免域名方案下那条路走不通（见上）。
+
+注意「Tunnel not found」会伪装成好地址：`grep -oE` 照样能抓到
+`https://xxx.trycloudflare.com`，**地址存在 ≠ 隧道存在**，得用
+`curl -x http://127.0.0.1:8118 "$URL/api/jobs"` 实际探到数据才算数。
+`restart.sh` 的重试循环因此把「拿地址」和「探测」合成一轮，三轮都探不通才放弃。
+
+`restart.sh` 里另有一个 `set -e` 的坑：没有进程可杀时 `pkill` 返回 1，
+`set -e` 会直接干掉整个脚本——第二轮开始常常就是这样（上一轮的 cloudflared
+已经自己退出了）。必须 `pkill ... || true`。
+
+### 看门狗（2026-10-10）
+
+`scripts/watchdog.sh`，探端点、连续 2 次失败就调 `restart.sh` 换隧道。
+5 分钟一探。
+
+**不检测 DNS。** 这批实测故障里 DNS 全程正常（`api.trycloudflare.com` 正常解析到
+Cloudflare 段），坏的是 `cloudflared` 注册超时和隧道进程自己退出。按 DNS 判会漏掉这两种。
+真正被污染的只有 `workers.dev`，那影响本机直连，跟隧道存活是两回事。
+
+**两个端点都要 200**：quick URL 活 = 隧道在；公网入口活 = Worker + KV 链路通。
+只探一个会漏——隧道活着但 KV 写坏，公网入口照样 530。
+
+同一个 `grep` 坑在这里是致命的另一种形态：cloudflared 申请失败时打的
+`Post "https://api.trycloudflare.com/tunnel"` 会被 `grep -oE` 捞成隧道地址，
+探它必然成功，**看门狗就永远健康、永远不触发**。必须排除 `^https://api\.`。
+
+连续 2 次才动手：单次失败多半是抖动，而重启必然掉线，误触发的代价是真断线。
+恢复不是瞬时的——KV 最终一致，实测从触发到公网入口 200 要 40 秒左右，中间是 530。
+
+```sh
+nohup sh scripts/watchdog.sh >/tmp/watchdog.log 2>&1 &   # 起
+pkill -f watchdog.sh                                     # 停（注意别匹配到系统的 watchdogd）
+```
+
+重启电脑后不会自启，要开机自启得写 launchd plist。
 
 ## 岗位详情（2026-10-09）
 

@@ -1,18 +1,18 @@
-"""岗位聚类：把 boss_jobs.json 的岗位按**职能**划成岗位族。
+"""岗位聚类：把 boss_jobs.json 的岗位按**职能**划成 Career。
 
 对应 workflow.md 的 S1。纯岗位侧，不读 persona.json——聚类时带上 Persona
 会让分类法向用户已经会的东西收敛，于是永远看不见邻近机会（workflow.md §2 S1）。
 
 一次 LLM 调用读完全部 JD，产出：
-  - 每个族的定位与归族判据
-  - job_id → family_id 的映射（必须落盘，见 workflow.md §2 S1）
+  - 每个 Career 的定位与归属判据
+  - job_id → career_id 的映射（必须落盘，见 workflow.md §2 S1）
 
-输出 data/job_families.json 是**人可编辑的产物**：族边界一重跑就漂，所以
+输出 data/careers.json 是**人可编辑的产物**：Career 边界一重跑就漂，所以
 「切边界」与「补能力」分成两步——本脚本只切边界，capabilities 字段整个
-不出现，由 scripts/extract_capabilities.py 逐族另跑一次补齐。那次调用读的
-是**磁盘上当前的边界**，因此边界可以先按人读的判断手改，再抽能力。
+不出现，由 scripts/extract_capabilities.py 逐个 Career 另跑一次补齐。那次调用
+读的是**磁盘上当前的边界**，因此边界可以先按人读的判断手改，再抽能力。
 
-用法（项目根执行）：python3 scripts/build_families.py
+用法（项目根执行）：python3 scripts/build_careers.py
 """
 
 from __future__ import annotations
@@ -28,17 +28,17 @@ sys.path.insert(0, str(ROOT / "backend"))
 from common import active_chain, call_llm, clean_llm_json  # noqa: E402
 
 JOBS_PATH = ROOT / "data" / "boss_jobs.json"
-OUT_JSON = ROOT / "data" / "job_families.json"
+OUT_JSON = ROOT / "data" / "careers.json"
 
 JD_MAX_CHARS = 1200
 
 
 def build_job_block(job: dict) -> str:
-    """一个岗位一块，带 id 便于模型回填归族结果。
+    """一个岗位一块，带 id 便于模型回填归属结果。
 
     JD 截断到 JD_MAX_CHARS：当前 30 岗合计约 1.4 万字符，一次调用读得完，
-    但岗位涨到几百个时不截断会把单次上下文顶爆，而族划分只需要职责与要求，
-    不需要后面的福利待遇段落。
+    但岗位涨到几百个时不截断会把单次上下文顶爆，而划分 Career 只需要职责与
+    要求，不需要后面的福利待遇段落。
     """
     jd = (job.get("jd") or "")[:JD_MAX_CHARS]
     return (
@@ -56,22 +56,22 @@ def build_job_block(job: dict) -> str:
 CLUSTER_PROMPT = """
 <Role>
 你是**岗位分类专家**。任务是把给定的一批真实岗位 JD 划成若干个
-**岗位族（job family）**，并为每个族定义其定位与归族判据。你只切边界，
-不列能力项——能力由另一次调用按族抽取。
+**Career**，并为每个 Career 定义其定位与归属判据。你只切边界，
+不列能力项——能力由另一次调用按 Career 抽取。
 </Role>
 
 <Principles>
 1. **job title 只作为辅助参考，主要判据是 JD 正文的职责与能力要求。** title 是各公司自定的
    命名习惯，有可能与实际职责错位。因此**先只读 JD 正文**，
-   对每个岗位先推断出「它实际承担什么、被考核什么、需要什么能力」，再据此归族。
-   同一族的充分条件是**岗位职责与能力要求一致**。
+   对每个岗位先推断出「它实际承担什么、被考核什么、需要什么能力」，再据此归类。
+   同一 Career 的充分条件是**岗位职责与能力要求一致**。
 2. **不按行业切。** 同一个真实职能（如经营分析）在游戏、电商、本地生活里都成立，
-   应归入同一族。反过来，行业相同但职能不同（电商供应链的商业分析 vs 电商BI
-   工程师）不得归入同一族。
-3. **族数服从内聚性，不预设目标数量。** 要求族的定义清晰，不互相重叠。
-   若某个岗位与所有已有族都不匹配，则**新建一个族**，不要硬塞进最像的那个。
-   避免族的核心能力定义被污染。**族内只有一个岗位也是合法的**——与其把
-   一个边缘岗位塞进错误的族、污染那个族的能力定义，宁可单开一个单岗族。
+   应归入同一 Career。反过来，行业相同但职能不同（电商供应链的商业分析 vs 电商BI
+   工程师）不得归入同一 Career。
+3. **Career 数服从内聚性，不预设目标数量。** 要求定义清晰，不互相重叠。
+   若某个岗位与所有已有 Career 都不匹配，则**新建一个**，不要硬塞进最像的那个。
+   避免定义被污染。**只有一个岗位的 Career 也是合法的**——与其把
+   一个边缘岗位塞进错误的 Career、污染那个 Career 的能力定义，宁可单开一个。
 </Principles>
 
 <Workflow>
@@ -79,8 +79,8 @@ CLUSTER_PROMPT = """
    对什么负责、被考核什么、需要什么能力。title 只作为参考，先形成判断再看
    title 复核，而不是反过来。
 2. 通读全部推断结果，按「职责与能力要求是否一致」归拢岗位。
-3. 为每个族确定 name（职能名，不带行业前缀）、positioning、membership_criteria。
-4. 把每个岗位放进**它所属那个族**的 jobs。**每个岗位必须恰好出现一次，
+3. 为每个 Career 确定 name（职能名，不带行业前缀）、positioning、membership_criteria。
+4. 把每个岗位放进**它所属那个 Career** 的 jobs。**每个岗位必须恰好出现一次，
    不允许遗漏，也不允许重复。**
 </Workflow>
 
@@ -88,18 +88,18 @@ CLUSTER_PROMPT = """
 必须且仅输出合法 JSON，不得包含 Markdown 代码块标记或任何前言后记。结构如下：
 
 {
-"families": [
+"careers": [
     {
-      "family_id": "F1",
+      "career_id": "C1",
       "name": "string (职能名，如「经营分析」)",
-      "positioning": "string (这个族在职业路径上的定位与典型职责重心)",
-      "membership_criteria": "string (什么样的岗位属于这一族，判据要可执行；按职责与能力要求描述，不要按 title 字面匹配)",
+      "positioning": "string (这个 Career 在职业路径上的定位与典型职责重心)",
+      "membership_criteria": "string (什么样的岗位属于这个 Career，判据要可执行；按职责与能力要求描述，不要按 title 字面匹配)",
       "jobs": [
         {
           "job_id": "string",
           "company": "string",
           "title": "string",
-          "belongs_note": "string (该岗位为何属于本族；若 title 与实际职能不符，在此说明)"
+          "belongs_note": "string (该岗位为何属于这个 Career；若 title 与实际职能不符，在此说明)"
         }
       ]
     }
@@ -125,27 +125,27 @@ def build_messages(jobs: list[dict]) -> list[dict]:
 
 
 def build_assignment(result: dict) -> dict[str, str]:
-    """从各族成员推出 job_id → family_id 反查表。
+    """从各 Career 成员推出 job_id → career_id 反查表。
 
-    归属不单独存：岗位出现在哪个族的 members 里，它就属于哪个族。
+    归属不单独存：岗位出现在哪个 Career 的 members 里，它就属于那个 Career。
     反查表是纯派生物，用时现算，不落盘。
     """
     return {
-        j["job_id"]: f["family_id"]
-        for f in result.get("families") or []
+        j["job_id"]: f["career_id"]
+        for f in result.get("careers") or []
         for j in f.get("jobs") or []
     }
 
 
 def verify(result: dict, jobs: list[dict]) -> None:
-    """校验每个输入岗位都恰好归入一个族。
+    """校验每个输入岗位都恰好归入一个 Career。
 
     对不上就不能落盘：漏掉的岗位会在下游静默消失——S2 不会分析它，
     页面上也不显示，却没有任何地方报错。
     """
     ids = [
         j.get("job_id")
-        for f in result.get("families") or []
+        for f in result.get("careers") or []
         for j in f.get("jobs") or []
     ]
     expected = {j["id"] for j in jobs}
@@ -173,7 +173,7 @@ def main() -> None:
         "model": msg["model"],
         "source_jobs_at": store.get("updated_at", ""),
         "total_jobs": len(jobs),
-        "families": result["families"],
+        "careers": result["careers"],
     }
     OUT_JSON.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -182,9 +182,9 @@ def main() -> None:
     print(
         f"耗时 {time.perf_counter() - t0:.1f}s · {msg['model']} → {OUT_JSON.name}\n"
         + "\n".join(
-            f"  {f['family_id']}: {f['name']} · "
+            f"  {f['career_id']}: {f['name']} · "
             f"{len(f.get('jobs') or [])} 个岗位"
-            for f in result["families"]
+            for f in result["careers"]
         )
     )
 

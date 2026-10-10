@@ -17,7 +17,7 @@ router = APIRouter()
 
 STORE = Path(__file__).resolve().parents[1] / "data" / "boss_jobs.json"
 GAPS = Path(__file__).resolve().parents[1] / "data" / "job_gaps.json"
-FAMILIES = Path(__file__).resolve().parents[1] / "data" / "job_families.json"
+CAREERS = Path(__file__).resolve().parents[1] / "data" / "careers.json"
 
 
 def _now() -> str:
@@ -110,22 +110,22 @@ def job_analysis(job_id: str) -> dict:
     return {"job_id": job_id, **row}
 
 
-@router.get("/api/families")
-def list_families() -> dict:
-    """岗位族（S1 产物）。族成员只有 job_id/company/title，缺 salary 与
+@router.get("/api/careers")
+def list_careers() -> dict:
+    """Career（S1 产物）。成员只有 job_id/company/title，缺 salary 与
     location，画不出卡片：按 id 回填 boss_jobs 的完整岗位，页面拿到即可
-    渲染。快照里消失的成员回落到族内的 company/title 与 belongs_note，
-    不报错——族定义是人可编辑的地基，不该被快照漂移带着走。
+    渲染。快照里消失的成员回落到 Career 内的 company/title 与 belongs_note，
+    不报错——Career 定义是人可编辑的地基，不该被快照漂移带着走。
     """
-    if not FAMILIES.exists():
-        return {"families": []}
-    doc = json.loads(FAMILIES.read_text(encoding="utf-8"))
+    if not CAREERS.exists():
+        return {"careers": []}
+    doc = json.loads(CAREERS.read_text(encoding="utf-8"))
     jobs = _load()["jobs"]
     return {
         **doc,
-        "families": [
+        "careers": [
             {**f, "jobs": [{**j, **jobs.get(j["job_id"], {}), "id": j["job_id"]}
                            for j in f.get("jobs", [])]}
-            for f in doc.get("families", [])
+            for f in doc.get("careers", [])
         ],
     }

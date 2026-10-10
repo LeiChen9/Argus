@@ -1,7 +1,7 @@
 import { greeting } from "./greeting.js";
 import { go } from "./nav.js";
 import { loadJobs } from "./jobs.js";
-import { loadCareer } from "./family.js";
+import { loadCareer } from "./career.js";
 import { initJobDetail } from "./job.js";
 import "./chat.js";
 

@@ -153,6 +153,28 @@ uvicorn main:app --app-dir backend --port 7800
 
 端口只出现在本节，**代码里没有硬编码端口**。换端口只改这一行。
 
+### 重启后拉什么
+
+两样，都不随开机自启：
+
+```sh
+cd /Users/riceball/Documents/Projs/Argus
+
+# 1. 后端（7800）。隧道指向它，不起就没东西可代理
+source activate echo
+uvicorn main:app --app-dir backend --port 7800 &
+
+# 2. 公网入口。隧道 + 写 KV + 校验，一步到位
+sh scripts/restart.sh
+
+# 3. 看门狗（可选）。探公网，连续 2 次失败自动重跑第 2 步
+nohup sh scripts/watchdog.sh >/tmp/watchdog.log 2>&1 &
+```
+
+`restart.sh` 自己也会起 7800（检测到没监听才起），所以第 1 步可以省。
+日志：`/tmp/uvicorn_7800.log`、`/tmp/quick.log`（隧道）、`/tmp/watchdog.log`（看门狗，
+空 = 健康）。
+
 ## 公网访问（Cloudflare Tunnel）
 
 不做 Workers 迁移（FastAPI + 本地文件存储 + 本机浏览器探针跑不上 Workers），
@@ -227,10 +249,13 @@ Cloudflare 段），坏的是 `cloudflared` 注册超时和隧道进程自己退
 
 ```sh
 nohup sh scripts/watchdog.sh >/tmp/watchdog.log 2>&1 &   # 起
-pkill -f watchdog.sh                                     # 停（注意别匹配到系统的 watchdogd）
+pkill -f "scripts/watchdog.sh"                            # 停
 ```
 
-重启电脑后不会自启，要开机自启得写 launchd plist。
+停的时候**必须带 `scripts/` 限定**：`pkill -f watchdog` 会连系统的
+`/usr/libexec/watchdogd` 一起杀掉。
+
+重启电脑后不会自启，详见 `## Run` 的「重启后拉什么」。
 
 ## 岗位详情（2026-10-09）
 

@@ -4,11 +4,13 @@
 会让分类法向用户已经会的东西收敛，于是永远看不见邻近机会（workflow.md §2 S1）。
 
 一次 LLM 调用读完全部 JD，产出：
-  - 每个族的定位、核心能力要求、归族判据
+  - 每个族的定位与归族判据
   - job_id → family_id 的映射（必须落盘，见 workflow.md §2 S1）
 
-输出 data/job_families.json 是**人可编辑的产物**：族定义和归族结果都是
-后续 S2/S4/S5 的地基，重跑聚类会让族的边界漂移，所以不在每次调用时重算。
+输出 data/job_families.json 是**人可编辑的产物**：族边界一重跑就漂，所以
+「切边界」与「补能力」分成两步——本脚本只切边界，capabilities 字段整个
+不出现，由 scripts/extract_capabilities.py 逐族另跑一次补齐。那次调用读的
+是**磁盘上当前的边界**，因此边界可以先按人读的判断手改，再抽能力。
 
 用法（项目根执行）：python3 scripts/build_families.py
 """
@@ -53,8 +55,9 @@ def build_job_block(job: dict) -> str:
 
 CLUSTER_PROMPT = """
 <Role>
-你是**岗位分类与职业能力建模专家**。任务是把给定的一批真实岗位 JD 划成若干个
-**岗位族（job family）**，并为每个族定义其定位与核心能力要求。
+你是**岗位分类专家**。任务是把给定的一批真实岗位 JD 划成若干个
+**岗位族（job family）**，并为每个族定义其定位与归族判据。你只切边界，
+不列能力项——能力由另一次调用按族抽取。
 </Role>
 
 <Principles>
@@ -69,8 +72,6 @@ CLUSTER_PROMPT = """
    若某个岗位与所有已有族都不匹配，则**新建一个族**，不要硬塞进最像的那个。
    避免族的核心能力定义被污染。**族内只有一个岗位也是合法的**——与其把
    一个边缘岗位塞进错误的族、污染那个族的能力定义，宁可单开一个单岗族。
-4. **能力要求用岗位原文支撑。** 每条 capability 必须能在至少一个成员岗位的
-   JD 中找到依据，不得引入 JD 里没有的行业黑话。
 </Principles>
 
 <Workflow>
@@ -79,10 +80,7 @@ CLUSTER_PROMPT = """
    title 复核，而不是反过来。
 2. 通读全部推断结果，按「职责与能力要求是否一致」归拢岗位。
 3. 为每个族确定 name（职能名，不带行业前缀）、positioning、membership_criteria。
-4. 抽取该族的 capabilities，按**职能本身**判断什么重要、什么次要、
-   什么是加分项——依据是该能力在这个职能的日常职责中处于什么位置（职能职责主要从JD；次要从对职能的理解来推断）
-   而非它在多少个成员岗位的 JD 里出现过。采样不均匀，出现次数不能完全代表重要性。
-5. 把每个岗位放进**它所属那个族**的 jobs。**每个岗位必须恰好出现一次，
+4. 把每个岗位放进**它所属那个族**的 jobs。**每个岗位必须恰好出现一次，
    不允许遗漏，也不允许重复。**
 </Workflow>
 
@@ -96,13 +94,6 @@ CLUSTER_PROMPT = """
       "name": "string (职能名，如「经营分析」)",
       "positioning": "string (这个族在职业路径上的定位与典型职责重心)",
       "membership_criteria": "string (什么样的岗位属于这一族，判据要可执行；按职责与能力要求描述，不要按 title 字面匹配)",
-      "capabilities": [
-        {
-          "capability": "string (能力要求本身)",
-          "level": "core | important | bonus (按该能力在职能中的重要性判断)",
-          "jd_evidence": "string (支撑这条要求的 JD 原文片段或要点)"
-        }
-      ],
       "jobs": [
         {
           "job_id": "string",
@@ -192,7 +183,6 @@ def main() -> None:
         f"耗时 {time.perf_counter() - t0:.1f}s · {msg['model']} → {OUT_JSON.name}\n"
         + "\n".join(
             f"  {f['family_id']}: {f['name']} · "
-            f"{len(f.get('capabilities') or [])} 条能力 · "
             f"{len(f.get('jobs') or [])} 个岗位"
             for f in result["families"]
         )

@@ -1,7 +1,10 @@
-"""Chat 领域：对话 + 简历上传初始化 Persona。
+"""Chat 领域：对话循环与工具注册 + 简历上传初始化 Persona。
 
-上传与解析实现全在 persona，本文件只做路由薄层。
-对话走 LLM 与工具循环（Agent loop），system prompt 里拼上已解析的 persona，历史存内存单例。
+本文件是 chat 领域的注册中心：SYSTEM_PROMPT、TOOLS / READERS 注册表、
+agent loop、以及全部路由。被 LLM tool call 调用的函数实现在 tools.py——
+注册归这里，实现归那里。
+
+上传与解析实现全在 persona，本文件只做路由薄层。历史存内存单例，重启即丢。
 """
 
 import json
@@ -11,9 +14,8 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from common import render_markdown, call_llm
+from tools import auto_compact, read_persona, read_careers, read_gaps_index, read_gap, search_jobs
 from persona import get_persona, init_persona_from_text, read_upload, save_targets
-from crawler import fetch_liepin_html, parse_jobs, fetch_boss_recommendations, fetch_boss_details
-from jobs import normalize, save_snapshot, read_careers, read_gaps_index, read_gap
 
 logger = logging.getLogger("argus.chat")
 
@@ -32,9 +34,8 @@ read_job_gaps（哪些岗位已有差距解读）、read_job_gap（某个岗位�
 读完直接回答用户关心的事，不要罗列你读了哪些文件、也不要复述文件里的原始结构。
 每次只输出一两句话。不要长篇大论。"""
 
-_history: list[dict] = []
 
-MAX_HISTORY = 20
+_history: list[dict] = []
 
 
 class ChatRequest(BaseModel):
@@ -46,14 +47,6 @@ class TargetRequest(BaseModel):
     target: list[str] = Field(default_factory=list)
     target_base: str = ""
     target_salary: str = ""
-
-
-def _read_persona() -> dict:
-    """读简历与求职意向。没上传过时回 empty，让模型直接问用户要简历。"""
-    data = get_persona()
-    if not data:
-        return {"status": "empty", "detail": "用户还没上传简历"}
-    return {"status": "ok", "persona": data}
 
 
 TOOLS = [
@@ -92,13 +85,14 @@ TOOLS = [
                 "required": ["job_id"],
             },
         },
-    }
+    },
 ]
+
 
 # update_persona / search_boss_jobs 暂时停用：TOOLS 里没注册，下面两段代码留着，
 # 想开回来把它们加回 TOOLS 即可。
 READERS = {
-    "read_persona": _read_persona,
+    "read_persona": read_persona,
     "read_careers": read_careers,
     "read_job_gaps": read_gaps_index,
     "read_job_gap": read_gap,
@@ -108,40 +102,6 @@ READERS = {
 MAX_TOOL_STEPS = 4
 
 
-def _search_jobs(keyword: str) -> tuple[dict, list[dict] | None]:
-    try:
-        raws = fetch_boss_recommendations(max_batches=1, timeout=25)
-        source = "boss_recommend"
-    except OSError:
-        raws, source = [], "liepin"
-    if source == "boss_recommend" and raws:
-        details = fetch_boss_details(raws)
-        merged = []
-        for j in raws:
-            key = j.get("encrypt_job_id") or j.get("job_link") or j.get("title")
-            d = details.get(key)
-            if d:
-                j = {**j, "jd": d.get("jd", ""), "skill_tags": d.get("skill_tags", []), "boss_active_status": d.get("boss_active_status", "")}
-                if j["jd"]:
-                    merged.append(j)
-        cards = [normalize(j, source) for j in merged]
-    else:
-        cards = [normalize(j, source) for j in raws]
-    if not cards:
-        source = "liepin"
-        cards = [normalize(j, source) for j in parse_jobs(fetch_liepin_html(keyword))]
-    if not cards:
-        return {"status": "error", "detail": "两个来源都没有结果"}, None
-    save_snapshot(cards, keyword)
-    summary = {
-        "status": "ok",
-        "source": source,
-        "count": len(cards),
-        "preview": [{k: c[k] for k in ("title", "company", "salary")} for c in cards[:5]],
-    }
-    return summary, cards
-
-
 def _execute_tool(name: str, args: dict) -> tuple[dict, list[dict] | None]:
     """执行工具，返回 (回喂 LLM 的 JSON 结果, 本轮岗位卡片或 None)。"""
     if name in READERS:
@@ -149,7 +109,7 @@ def _execute_tool(name: str, args: dict) -> tuple[dict, list[dict] | None]:
     if name == "update_persona":
         save_targets(args["target"], args["target_base"], args["target_salary"])
         return {"status": "ok"}, None
-    return _search_jobs(args["keyword"])
+    return search_jobs(args["keyword"])
 
 
 def _run_agent(messages: list[dict]) -> tuple[dict, list[dict] | None]:
@@ -182,7 +142,7 @@ def chat(body: ChatRequest) -> dict:
     try:
         msg, cards = _run_agent([
             {"role": "system", "content": SYSTEM_PROMPT},
-            *_history[-(MAX_HISTORY - 1):],
+            *auto_compact(_history),
             {"role": "user", "content": message},
         ])
     except RuntimeError as e:
@@ -195,6 +155,15 @@ def chat(body: ChatRequest) -> dict:
     if cards:
         resp["jobs"] = cards
     return resp
+
+
+@router.post("/api/chat/clear")
+def chat_clear() -> dict:
+    """清空对话历史。摘要与原文都只在本进程内存里，重启同样会丢，
+    给用户一个「说错了，重来」的动作即可，不必追问确认。"""
+    n = len(_history)
+    _history.clear()
+    return {"cleared": n}
 
 
 @router.post("/api/persona/init")

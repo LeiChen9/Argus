@@ -62,6 +62,19 @@ const showTyping = () => {
 
 document.getElementById("chat-back").addEventListener("click", () => go("home"));
 
+// 清空对话上下文。后端历史是内存单例，清掉重启也一样，所以不做二次确认——
+// 说错了重来一遍的成本，远低于点一次「确认」的摩擦。清完把气泡也清掉，
+// 留一句 Argus 的话，不然界面空得突兀。
+document.getElementById("chat-clear").addEventListener("click", async () => {
+  try {
+    await fetch("/api/chat/clear", { method: "POST" });
+  } catch (err) {
+    show(row("them", `没清成功：${err.message}`));
+    return;
+  }
+  msgs.replaceChildren(row("them", "好，我们重新聊。"));
+});
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const picked = file.files[0];

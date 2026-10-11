@@ -68,8 +68,12 @@ def save_snapshot(cards: list[dict], keyword: str) -> None:
     save_json_file(STORE, json.dumps(store, ensure_ascii=False, indent=2))
 
 
-def _gaps() -> dict:
-    """{job_id: {"generated_at", "model", "analysis"}}"""
+def gaps_by_job() -> dict:
+    """{job_id: {"generated_at", "model", "analysis"}}
+
+    data/job_gaps.json 的归一化视图。给 tools.py 的 read_job_gap 工具和
+    本文件的 /api/jobs/{id}/analysis 路由共用。
+    """
     if not GAPS.exists():
         return {}
     doc = json.loads(GAPS.read_text(encoding="utf-8"))
@@ -93,50 +97,6 @@ def _gaps() -> dict:
     }
 
 
-# ── 给 Chat 读的只读口 ────────────────────────────────────────────────────
-# data/ 是事实源，这三个函数只读不写。文件名与语义都写在 LLM 的工具描述里。
-
-
-def read_careers() -> dict:
-    """Career 全量：定位、归属判据、能力清单、成员岗位。6 个 Career 一次读完，
-    模型才能横向比较。只回 careers 数组，generated_at 之类的元信息对回答没用。"""
-    if not CAREERS.exists():
-        return {"status": "error", "detail": "还没有 careers.json"}
-    doc = json.loads(CAREERS.read_text(encoding="utf-8"))
-    return {"status": "ok", "careers": doc.get("careers", [])}
-
-
-def read_gaps_index() -> dict:
-    """岗位 × persona 差距解读的索引。全量 438KB 读不动，先只给
-    公司/岗位/薪资/地点，模型挑中哪个再用 job_id 读单条全文。"""
-    if not GAPS.exists():
-        return {"status": "error", "detail": "还没有 job_gaps.json"}
-    doc = json.loads(GAPS.read_text(encoding="utf-8"))
-    return {
-        "status": "ok",
-        "generated_at": doc.get("generated_at", ""),
-        "jobs": [
-            {
-                "job_id": j["job"]["id"],
-                "title": j["job"].get("title", ""),
-                "company": j["job"].get("company", ""),
-                "salary": j["job"].get("salary", ""),
-                "location": j["job"].get("location", ""),
-            }
-            for j in doc.get("results", [])
-        ],
-    }
-
-
-def read_gap(job_id: str) -> dict:
-    """单个岗位的完整解读：每条要求与 persona 的匹配状态、缺什么、简历里的证据。
-    带上跑分析时的求职意向快照——不然模型无从判断「对齐」是对齐到什么。"""
-    row = _gaps().get(job_id)
-    if not row:
-        return {"status": "error", "detail": f"没有 {job_id} 的解读"}
-    return {"status": "ok", **row}
-
-
 @router.get("/api/jobs")
 def list_jobs() -> dict:
     store = _load()
@@ -148,7 +108,7 @@ def job_analysis(job_id: str) -> dict:
     """单个岗位的 cluster 解读。analysis 原样透传，不在这里补字段：
     这一批 LLM 输出的键并不齐（openning/opening、defensive_script 三种变体、
     部分 gap_details 只有 has_gap），归一化放前端读时兜底，重跑就能自愈。"""
-    row = _gaps().get(job_id)
+    row = gaps_by_job().get(job_id)
     if not row:
         raise HTTPException(404, "该岗位暂无 AI 解读")
     return {"job_id": job_id, **row}

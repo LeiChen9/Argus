@@ -59,7 +59,7 @@ Last updated: 2026-10-09
 backend/
   main.py                      FastAPI app + no-store 中间件
   chat.py                      /api/chat Agent 循环、/api/persona*
-  jobs.py                      /api/jobs、/api/jobs/{id}/analysis、/api/careers、normalize、save_snapshot
+  jobs.py                      /api/jobs、/api/jobs/{id}/analysis、/api/careers、normalize、save_snapshot、Chat 的三个只读口 read_careers/read_gaps_index/read_gap
   crawler.py                   BOSS CDP 采集 + 猎聘回退
   persona.py                   简历解析与 Persona 落盘
   common.py                    .env 读取、LLM 容灾链、markdown 渲染
@@ -417,6 +417,39 @@ Career 内的 company/title 在**前**、快照的在**后**，于是快照更�
   一致，为省一次清洗没去掉
 - 页面不显示 `belongs_note`（某岗位为何属于这个 Career）。它是 S1 唯一解释 title 与实际
   职能不符的地方，核对价值最高，但现在只在 API 里。Career 内岗位多了会挤，先不做
+
+## Chat Agent（2026-10-11）
+
+Chat 是主 Agent loop：system prompt 里只有工具说明，**所有事实都在文件里，由模型自己决定读哪个**。
+四个只读工具，注册在 `chat.py::TOOLS`，实现在 `jobs.py` 与 `chat.py::_read_persona`：
+
+| 工具 | 返回 | 大小 |
+|---|---|---|
+| `read_persona` | 简历与求职意向（经历、项目、技能、意向职位/城市/薪资） | 4KB |
+| `read_careers` | 6 个 Career 的定位、归属判据、能力清单、成员岗位，全量 | 19KB |
+| `read_job_gaps` | 岗位 × persona 差距解读的**索引**（公司/岗位/薪资/地点） | 5KB |
+| `read_job_gap(job_id)` | 单个岗位的完整解读：每条要求的匹配状态、缺什么、简历证据 | ~12KB |
+
+### 四个决定
+
+1. **persona 不再常驻 system prompt。** 原先 `_system_with_persona()` 每轮把整份 JSON 拼进
+   system message（4KB ≈ 2k token），现在改成工具按需读：省 token，也让「读文件」这件事
+   本身成为模型的显式动作。
+2. **`job_gaps` 两段式。** 全量 438KB（30 岗 ≈ 15KB/岗）读不动，且必然顶穿 Groq 的
+   7000 输入 token 闸门（`common.py:101`）。先给 5KB 索引、模型挑中再按 `job_id` 读单条，
+   单次上限因此可控。
+3. **`careers` 一次全量。** 只有 6 个 Career，模型要横向比较；两段式会让它多绕一次，
+   而且得先知道叫什么名字才能查。
+4. **读工具不产出前端卡片。** `search_boss_jobs` 原本把结果旁路成 `resp["jobs"]` 给前端，
+   读工具纯做上下文注入，不碰渲染。
+
+### 暂时停用的两个工具
+
+`update_persona`（写求职意向）与 `search_boss_jobs`（搜岗位）已从 `TOOLS` 摘掉，
+`_search_jobs`、`save_targets` 调用与 cards 旁路代码原样留在 `chat.py`。
+想开回来把它们加回 `TOOLS` 即可。dispatch 走 `READERS` 字典，`_execute_tool` 里
+先查 `READERS` 再落到旧分支——不加这个字典，读工具会被旧代码当成 `search_boss_jobs`
+去搜岗位。
 
 ## 约定
 

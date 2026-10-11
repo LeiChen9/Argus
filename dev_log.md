@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-10-11 — Session: Chat 变主 Agent loop，接上只读上下文
+
+Chat 原来只有两个工具：`update_persona`（写意向）、`search_boss_jobs`（搜岗位），
+且 persona 每轮常驻 system prompt。`chat.py` 是最开始写的，能力面太窄。
+
+**做了什么**
+
+两个旧工具暂时摘掉注册，代码留着（`_search_jobs` / `save_targets` / cards 旁路都在原地，
+加回 `TOOLS` 即可开回来）。换成四个只读工具：persona、careers、job_gaps 索引、单岗解读，
+实现在 `jobs.py` 与 `chat.py::_read_persona`，`_execute_tool` 用 `READERS` 字典分派。
+system prompt 相应重写成「先判断用户意图，再决定读哪个」。
+
+**四个决定**
+
+1. persona 改成工具按需读，不再常驻 system message（省 2k token/轮）
+2. `job_gaps` 两段式：全量 438KB 顶穿 Groq 的 7000 token 闸门，先给 5KB 索引，
+   模型挑中再按 `job_id` 读单条（~12KB）
+3. `careers` 一次全量 19KB：只有 6 个 Career，模型要横向比较
+4. 读工具不产出前端卡片，纯上下文注入；`data/` 只读不写
+
+**验证**：echo 环境 TestClient 实跑一轮真实 LLM——「我现在能投哪个岗位？」依次调
+`read_persona` → `read_job_gaps` → `read_job_gap`，3 步收尾答出具体岗位；
+公网 `argus-proxy.luent-hat.workers.dev/api/chat` 再验一次「我和经营分析岗差在哪」，
+答的是 P&L 硬经验与高管报告，确实来自 job_gaps 内容。
+
+**踩的坑**
+
+1. **`restart.sh` 不重启后端。** `restart.sh:7` 是 `if ! lsof -i :7800` 才拉 uvicorn，
+   端口在监听就整段跳过。光跑它代码不会加载，白白断一次隧道、改一次 KV 上游。
+   改 Python 后只重启 uvicorn 就够——隧道连的是 `localhost:7800`，进程换 PID 端口不变。
+2. **本地 curl 不能走 8118 代理。** `restart.sh` 里 `curl -x http://127.0.0.1:8118` 是给
+   trycloudflare 用的（直连本地网络几乎必超时）。拿同样的 `-x` 去打 `127.0.0.1:7800`
+   会空返回，看起来像接口挂了，实际是代理把本地请求也劫走了。加 `--noproxy '*'`。
+
 ## 2026-10-11 — Session: 免费模型扩容（agnes / kilo / groq）
 
 用户往 `.env` 加了 agnes、kilo、groq 三把 key，要把免费模型顶到容灾链前面。

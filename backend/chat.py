@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from common import render_markdown, call_llm
 from persona import get_persona, init_persona_from_text, read_upload, save_targets
 from crawler import fetch_liepin_html, parse_jobs, fetch_boss_recommendations, fetch_boss_details
-from jobs import normalize, save_snapshot
+from jobs import normalize, save_snapshot, read_careers, read_gaps_index, read_gap
 
 logger = logging.getLogger("argus.chat")
 
@@ -23,22 +23,14 @@ SYSTEM_PROMPT = """你是 Argus，一个职业发展助手。
 
 你的目标是充分了解用户，为他/她找到心仪合适的工作。
 通过持续对话理解用户经历，用户求职的目标，期望薪资范围，以及期望工作城市。
-用户的简历信息如果存在，已经放在下方 JSON 里。
 
-每次只输出一两句话。不要长篇大论。
+你对用户的了解全部存在四个只读文件里，需要时自己判断读哪个，不要预读、也不要一次读全：
+read_persona（用户是谁、做过什么、想去哪）、read_careers（岗位侧要什么能力）、
+read_job_gaps（哪些岗位已有差距解读）、read_job_gap（某个岗位差在哪）。
+先用 read_persona 确认用户底细，再用 read_careers 看岗位要求，最后才用 read_job_gap 核对具体岗位。
 
-你有两个工具：
-
-update_persona：记录求职意向。target 是职位列表，按意向度从高到低；
-职位列表、意向城市、期望薪资三项都明确后才调用。
-
-search_boss_jobs：搜索岗位，结果以卡片展示。
-- 只在用户主动要求搜索或查看岗位时调用；刚保存完意向，先问用户要不要搜一轮。
-- keyword 由你组合：用户这次给的条件优先，缺的部分从简历信息的 target 和 target_base 补齐。
-- 先走 BOSS直聘登录账号的个性化推荐（约 15-30 秒），不可用时自动回退猎聘关键词搜索。
-- 结果先存入 Jobs 页，再以卡片直接展示给用户，你无需复述岗位明细。
-- 返回 JSON 摘要：status / source / count / preview（前 5 条）。用一两句点评岗位质量、与用户意向的匹配度，或给出下一步建议。preview 是给你点评用的，不要在回复里罗列岗位清单。
-- status 为 error 时如实转告，并建议换个关键词。"""
+读完直接回答用户关心的事，不要罗列你读了哪些文件、也不要复述文件里的原始结构。
+每次只输出一两句话。不要长篇大论。"""
 
 _history: list[dict] = []
 
@@ -56,46 +48,61 @@ class TargetRequest(BaseModel):
     target_salary: str = ""
 
 
-def _system_with_persona() -> str:
+def _read_persona() -> dict:
+    """读简历与求职意向。没上传过时回 empty，让模型直接问用户要简历。"""
     data = get_persona()
     if not data:
-        return SYSTEM_PROMPT
-    dumped = json.dumps(data, ensure_ascii=False, indent=2)
-    return f"{SYSTEM_PROMPT}\n\n用户的简历信息：\n{dumped}"
+        return {"status": "empty", "detail": "用户还没上传简历"}
+    return {"status": "ok", "persona": data}
 
 
 TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "update_persona",
-            "description": "记录用户的求职意向。只在用户明确告知时调用。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "target": {"type": "array", "items": {"type": "string"}, "description": "职位列表，按意向度从高到低"},
-                    "target_base": {"type": "string", "description": "意向城市"},
-                    "target_salary": {"type": "string", "description": "期望薪资区间"},
-                },
-                "required": ["target", "target_base", "target_salary"],
-            },
+            "name": "read_persona",
+            "description": "读用户的简历与求职意向：工作经历、项目、技能，以及意向职位/城市/薪资。凡是问到用户是谁、做过什么、能投哪，先读这个。",
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "search_boss_jobs",
-            "description": "按关键词搜索岗位：结果先持久化到 Jobs 页，再在对话中以卡片展示，返回 JSON 摘要供你点评。仅在用户主动要求搜索或查看岗位时调用。",
+            "name": "read_careers",
+            "description": "读岗位侧的 Career 定义：每个 Career 的定位、岗位归属判据、要求的能力清单（分 core/important/bonus）及成员岗位。用户问某类岗位要什么能力、或这几个岗位像不像一类时读。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_job_gaps",
+            "description": "读岗位 × 用户差距解读的索引：公司、岗位、薪资、地点，约 30 条。只列清单不展开，先读它才知道有哪些岗位值得细看。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_job_gap",
+            "description": "读单个岗位的完整差距解读。job_id 取自 read_job_gaps 的索引。返回每条要求的匹配状态（transferable/gap）、缺什么、简历里哪一段作证据，以及当时的求职意向。用户关心某个具体岗位值不值得投时才读。",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "keyword": {"type": "string", "description": "检索词，组合自用户本次要求与求职意向（target + target_base），如「上海 数据分析」"},
-                },
-                "required": ["keyword"],
+                "properties": {"job_id": {"type": "string", "description": "岗位 id，来自 read_job_gaps"}},
+                "required": ["job_id"],
             },
         },
     }
 ]
+
+# update_persona / search_boss_jobs 暂时停用：TOOLS 里没注册，下面两段代码留着，
+# 想开回来把它们加回 TOOLS 即可。
+READERS = {
+    "read_persona": _read_persona,
+    "read_careers": read_careers,
+    "read_job_gaps": read_gaps_index,
+    "read_job_gap": read_gap,
+}
 
 
 MAX_TOOL_STEPS = 4
@@ -137,6 +144,8 @@ def _search_jobs(keyword: str) -> tuple[dict, list[dict] | None]:
 
 def _execute_tool(name: str, args: dict) -> tuple[dict, list[dict] | None]:
     """执行工具，返回 (回喂 LLM 的 JSON 结果, 本轮岗位卡片或 None)。"""
+    if name in READERS:
+        return READERS[name](**args), None
     if name == "update_persona":
         save_targets(args["target"], args["target_base"], args["target_salary"])
         return {"status": "ok"}, None
@@ -172,7 +181,7 @@ def chat(body: ChatRequest) -> dict:
 
     try:
         msg, cards = _run_agent([
-            {"role": "system", "content": _system_with_persona()},
+            {"role": "system", "content": SYSTEM_PROMPT},
             *_history[-(MAX_HISTORY - 1):],
             {"role": "user", "content": message},
         ])

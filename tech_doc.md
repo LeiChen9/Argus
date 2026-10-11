@@ -58,8 +58,9 @@ Last updated: 2026-10-09
 ```
 backend/
   main.py                      FastAPI app + no-store 中间件
-  chat.py                      /api/chat Agent 循环、/api/persona*
-  jobs.py                      /api/jobs、/api/jobs/{id}/analysis、/api/careers、normalize、save_snapshot、Chat 的三个只读口 read_careers/read_gaps_index/read_gap
+  chat.py                      /api/chat Agent 循环与工具注册、/api/persona*、/api/chat/clear
+  tools.py                     Agent 工具实现：四个只读工具、search_jobs、auto_compact
+  jobs.py                      /api/jobs、/api/jobs/{id}/analysis、/api/careers、normalize、save_snapshot、gaps_by_job
   crawler.py                   BOSS CDP 采集 + 猎聘回退
   persona.py                   简历解析与 Persona 落盘
   common.py                    .env 读取、LLM 容灾链、markdown 渲染
@@ -68,7 +69,7 @@ backend/
     index.html                 由 FastAPI StaticFiles 直接 serve
     css/app.css                设计系统，移植自 FluentChat；含岗位详情、AI 解读与 Career 段
     js/app.js                  tab 切换 + 招呼语注入 + 引入 chat.js + initJobDetail
-    js/chat.js                 气泡渲染 / 调 /api/chat / 上传 chip
+    js/chat.js                 气泡渲染 / 调 /api/chat / 上传 chip / 清空上下文
     js/jobs.js                 Jobs 页拉 /api/jobs
     js/career.js               Career 页拉 /api/careers，渲染 Career 卡片
     js/cards.js                岗位卡片（Chat 横滑轨道、Jobs 网格、Career 内轨道共用）
@@ -413,7 +414,7 @@ Career 内的 company/title 在**前**、快照的在**后**，于是快照更�
 
 ### 已知取舍
 
-- 返回的 Career 成员里 `job_id` 与 `id` 重复透传。跟 `jobs.py` 里 `_gaps()` 的既有写法
+- 返回的 Career 成员里 `job_id` 与 `id` 重复透传。跟 `jobs.py` 里 `gaps_by_job()` 的既有写法
   一致，为省一次清洗没去掉
 - 页面不显示 `belongs_note`（某岗位为何属于这个 Career）。它是 S1 唯一解释 title 与实际
   职能不符的地方，核对价值最高，但现在只在 API 里。Career 内岗位多了会挤，先不做
@@ -421,7 +422,7 @@ Career 内的 company/title 在**前**、快照的在**后**，于是快照更�
 ## Chat Agent（2026-10-11）
 
 Chat 是主 Agent loop：system prompt 里只有工具说明，**所有事实都在文件里，由模型自己决定读哪个**。
-四个只读工具，注册在 `chat.py::TOOLS`，实现在 `jobs.py` 与 `chat.py::_read_persona`：
+四个只读工具，schema 注册在 `chat.py::TOOLS`，**实现在 `tools.py`**：
 
 | 工具 | 返回 | 大小 |
 |---|---|---|
@@ -429,6 +430,50 @@ Chat 是主 Agent loop：system prompt 里只有工具说明，**所有事实都
 | `read_careers` | 6 个 Career 的定位、归属判据、能力清单、成员岗位，全量 | 19KB |
 | `read_job_gaps` | 岗位 × persona 差距解读的**索引**（公司/岗位/薪资/地点） | 5KB |
 | `read_job_gap(job_id)` | 单个岗位的完整解读：每条要求的匹配状态、缺什么、简历证据 | ~12KB |
+
+### 领域的划分：注册归 chat，实现归 tools
+
+划分依据是**这块代码归哪个领域、谁消费它**，不是「看起来像什么」。
+**被 LLM 当 tool call 调用的函数，实现全在 `tools.py`**——它们的服务对象是模型调用，
+不是某个 HTTP 路由。`chat.py` 决定「有哪些工具、怎么注册」，`tools.py` 决定
+「工具被调用时干什么」。于是 `SYSTEM_PROMPT`（对话总指令，不注册任何工具）与
+`TOOLS`/`READERS` 注册表都留在 chat.py，而 `read_careers` 等实现从 `jobs.py`
+搬进 `tools.py`。
+
+**tools.py 因此不认识 HTTP**，四个只读工具直接读 `data/` 下的文件，不经 `jobs.py`
+的路由函数——两者用途不同（`/api/careers` 是给前端渲染，工具是给模型读的）。
+`jobs.py::_gaps` 改名 `gaps_by_job`，因为工具与路由共用它。
+
+依赖方向单向：`chat → tools → {persona, jobs, crawler}`、`chat → persona`、
+`jobs → persona`。**chat.py 已不 import crawler。**
+
+### 上下文压缩：按 token 阈值，不按轮数（2026-10-11）
+
+原先用 `MAX_HISTORY = 20` 截断历史，有两个各自独立的毛病：
+
+1. **轮数与 token 无关。** 9 轮闲聊就能让单次请求到 10k+ token。实测固定开销
+   610（system + 工具声明）+ `read_careers` 返回 5370 + `read_job_gap` 最大 7082，
+   一轮就可能顶到 18k。
+2. **工具结果不跨轮持久化。** `_history` 只收 user 文本与 assistant 回复，
+   `read_careers` 那 5370 token 只活在单次请求的局部列表里。且 9 轮窗口会把
+   前几题挤出历史——后续做 S2/S3 追问流程时，模型到第 8 题就已经想不起 Q1。
+
+改为**超 token 阈值触发压缩**：`tools.auto_compact()` 在 `/api/chat` 发请求前调，
+保留最近 6 轮原文 + 一条摘要，摘要以 `user` 身份注入（system prompt 保持单一
+事实源，与 Claude Code / Codex 一致）。
+
+阈值 **128k** = 链首三个模型（`agnes-3.0-flash` 262k / `ling-3.1-flash` 262k /
+`nemotron-3-ultra 1M`）context window 平均值 507k 的 25%。
+
+- **`auto_compact` 不注册进 `TOOLS`。** 压缩若是模型可选行为，模型不调就不压，
+  阈值形同虚设。它是代码行为。
+- **压缩失败不抛**，原样保留历史：压缩是优化，不该让这一轮问答整个失败。
+- 摘要 prompt 硬性要求保留三件事：未完成的事（追问停在第几题）、用户的事实性
+  陈述（persona 里没有、只存在于对话里的信息）、已确认的结论。
+- 只动内存不落盘，与既有语义一致（重启即丢）。
+
+另有 `POST /api/chat/clear` 与 Chat 头部的清空按钮，给用户一个「说错了，重来」
+的动作，**不做二次确认**——自用工具，清错重来一遍的成本远低于点确认的摩擦。
 
 ### 四个决定
 
@@ -446,10 +491,14 @@ Chat 是主 Agent loop：system prompt 里只有工具说明，**所有事实都
 ### 暂时停用的两个工具
 
 `update_persona`（写求职意向）与 `search_boss_jobs`（搜岗位）已从 `TOOLS` 摘掉，
-`_search_jobs`、`save_targets` 调用与 cards 旁路代码原样留在 `chat.py`。
+`save_targets` 调用留在 `chat.py` 的 dispatch 分支，`search_jobs` 实现在 `tools.py`
+（原 `chat.py::_search_jobs`，去掉下划线是因为它是跨模块公开的实现）。
 想开回来把它们加回 `TOOLS` 即可。dispatch 走 `READERS` 字典，`_execute_tool` 里
 先查 `READERS` 再落到旧分支——不加这个字典，读工具会被旧代码当成 `search_boss_jobs`
 去搜岗位。
+
+`search_jobs` 是**唯一会写 `data/` 的工具**（落 `boss_jobs.json` 覆盖快照），
+其余四个只读不写。
 
 ## 约定
 

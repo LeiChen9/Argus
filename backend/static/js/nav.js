@@ -15,10 +15,10 @@ export const go = (name) => {
   for (const tab of tabs) {
     tab.setAttribute("aria-selected", String(tab.dataset.view === name));
   }
-  if (name !== "job") last = name;
+  if (name !== "job" && name !== "resumedit") last = name;
   // 详情页和 Chat 一样是"沉浸式"：tabbar 让位，否则在详情页点 Jobs tab 会撞上
   // app.js 里"已选中就 return"的短路，卡在原地回不去。
-  const bare = name === "chat" || name === "job";
+  const bare = name === "chat" || name === "job" || name === "resumedit";
   topbar.hidden = bare;
   tabbar.hidden = bare;
 };

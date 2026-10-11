@@ -4,7 +4,63 @@
 
 ---
 
-## 2026-10-11 — Session: Chat 变主 Agent loop，接上只读上下文
+## 2026-10-11 — Session: 简历所有权转移——AI 只出建议，用户亲手执笔
+
+### 要解决的问题
+
+简历这一整片此前是「AI 写、AI 改」的模型：`draft()` 把 Chat 里挖到的经历直接并进简历，
+`rewrite()` 按筛选意见改写措辞，`apply_resume_edits()` 让 LLM 直接打 patch。
+跟 README 里「Evidence First / Human in the Loop」两条原则是冲突的——
+用户是被判断的人，不该是被改的文件。
+
+### 做了什么
+
+**所有权归位。** AI 在简历上只剩两个动作：**问**（挖掘追问，DIRECTIVE）和**评**（critique）。
+`draft()` / `rewrite()` 连同两段 prompt 一起删掉，`draft_resume` / `rewrite_resume` /
+`apply_resume_edits` 三个工具从 TOOLS 摘掉。工具从 9 个降到 7 个。
+
+**上下文永远是最新的。** 简历正文进 system prompt 而不是 history——
+`auto_compact` 压的是 history，贴进去会被压成摘要、模型就拿着改之前的旧版本跟用户讨论。
+每轮现读磁盘，尾部带一句「你在这段对话里读到的、记下的任何简历内容一律作废」。
+顺手把 `read_persona` 描述改成「他**最初上传的那份**」，因为用户改完简历后
+persona 与简历会分叉，模型最可能在这里出精神错乱。
+
+**Resume 页。** tabbar 插在 Chat 与 Jobs 之间：Chat | **Resume** | Jobs | Career | Me。
+每个 Career 默认一份底稿（`ensure_all`，逐字拷 persona 去掉求职意向，零 LLM），
+用户自己去改。这页**不挂 AI 评语**——评语是 Argus 在 Chat 里说的话。
+
+**编辑方式。** 每张卡片平时只读，右上角一个 Edit 图标；点开才变成输入框，
+改完点「提交」才发请求。删除换成垃圾桶图标，删整段经历要点两次（3 秒后自动复原）。
+请求只在提交那一刻发，取消不触发任何网络请求。
+
+### 三个决定
+
+1. **简历是用户的文件，不是派生物。** `workflow.md` 原来把简历归为「可随时删了重生成」，
+   用户亲手改过之后这条不成立了。`data/README.md` 补了 `resumes/` 并注明这一点。
+2. **patch 机制保留但触发者从 LLM 变成用户。** `apply_edits` 现在唯一的调用方是
+   `POST /api/resumes/{id}/edits`，前端表单把字段换算成 ops 发过来。
+   结构化表单天生知道「用户改的是哪个 JSON Pointer」，所以它没进冷冻室。
+3. **每个 Career 一份，彼此独立。** C1–C6 是六个文件各自演化，同一个项目在经营分析里
+   改了措辞不会同步到用户增长那份。这是「每个 Career 一份简历」的必然结果。
+
+### 踩的坑
+
+1. **两个详情页抢同一个 `hashchange`。** `job.js` 和 `resume.js` 都监听 hashchange，
+   点简历行时 job 的 handler 先跑，看到不属于它的 hash 就 `replaceState` 清掉 + navBack，
+   resume 的 handler 再读到的就是空的。修法是「不是我的 hash 不等于关闭」，
+   两个 handler 都改成只在自己认得的 hash 上动作。改之前只跑了 `node --check`，
+   没在真浏览器里点一遍——是我的验证不够。
+2. **描述框渲染成 `<input>` 而不是 `<textarea>`。** `field()` 助手靠类名 `--long` 后缀
+   判断多行，但所有调用点传的都是不带后缀的类名。66 字的描述被截成一行 20 来个字，
+   看不全也改不全。截图上看不出来，直到去浏览器里查 `tagName` 才发现。
+3. **删按钮被 textarea 盖住。** 用 `float: right; margin-top: -32px` 把按钮浮到描述框
+   上面，结果 textarea 吃掉点击，每个项目的「删」都是死的。改成绝对定位 + 名称框让位。
+4. **`/api/resumes/{id}` 没返回 `career_name`/`updated_at`。** 它们存在文档层不在
+   `resume` 层，详情页标题一直显示兜底的「简历」，Chat 里那张卡同样有这个毛病。
+   加了 `document()` 统一拼视图。
+5. **只有 C1 有简历是因为懒建。** `copy_from_persona` 只在 `start_resume` 调用时才落盘。
+   加 `ensure_all`，`/api/resumes` 走它补齐每个 Career 的底稿。
+，接上只读上下文
 
 Chat 原来只有两个工具：`update_persona`（写意向）、`search_boss_jobs`（搜岗位），
 且 persona 每轮常驻 system prompt。`chat.py` 是最开始写的，能力面太窄。

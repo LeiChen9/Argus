@@ -3,7 +3,6 @@
 - read_env_key: 从项目根 .env 读 key
 - llm_client / agnes_client / kilo_client / groq_client: 各家 OpenAI 兼容端点，chat 和 persona 共用
 - active_chain / call_llm: 模型容灾链，按 active_chain 顺序故障转移
-- load_json_file / save_json_file: persona.json 落盘底层
 - clean_llm_json: 去 markdown 代码块后解析 JSON
 """
 
@@ -49,15 +48,6 @@ def llm_client() -> OpenAI:
     return OpenAI(
         api_key=read_env_key("gemini_apiKey"),
         base_url=GEMINI_BASE_URL,
-    )
-
-
-@cache
-def zhipu_client() -> OpenAI:
-    """智谱备用端点。"""
-    return OpenAI(
-        api_key=read_env_key("zhipu_realtime_apiKey"),
-        base_url="https://open.bigmodel.cn/api/paas/v4/",
     )
 
 
@@ -150,7 +140,6 @@ MODEL_CHAIN = [
     {"name": "openai/gpt-oss-20b", "client": groq_client, "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
     {"name": "qwen/qwen3.8-27b", "client": groq_client, "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
     {"name": GEMINI_MODEL, "client": llm_client},
-    {"name": "glm-4.7-flash", "client": zhipu_client},
     {"name": DEEPSEEK_MODEL, "client": deepseek_client},
 ]
 
@@ -168,16 +157,6 @@ def active_chain() -> list[dict]:
         if item["name"] != DEEPSEEK_MODEL or deepseek_usable
     ]
 
-
-
-def load_json_file(path: Path) -> dict:
-    """读 JSON 文件。不存在抛 FileNotFoundError，由调用方决定回退。"""
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def save_json_file(path: Path, payload: str) -> None:
-    """写文本到文件。调用方负责序列化，本函数只做 IO。"""
-    path.write_text(payload + "\n", encoding="utf-8")
 
 
 def render_markdown(text: str) -> str:
@@ -199,13 +178,33 @@ def clean_llm_json(raw: str) -> dict:
     return json.loads(body)
 
 
-def call_llm(messages: list[dict], *, tools: list[dict] | None = None, temperature: float = 0.7) -> dict:
-    """统一 LLM 调用，按 active_chain 顺序故障转移。返回 message 内容与实际使用的模型名。"""
+def ask_json(prompt: str, blocks: list[str], temperature: float = 0.7,
+             model: str | None = None) -> dict:
+    """一次 LLM 调用要回 JSON。blocks 是跟在 prompt 后面的几段材料，各自一个 user 消息。
+
+    model 非空时把它提到容灾链首（见 call_llm 的 pinned）。
+    """
+    messages = [{"role": "user", "content": prompt},
+                *({"role": "user", "content": b} for b in blocks)]
+    return clean_llm_json(call_llm(messages, temperature=temperature, pinned=model)["content"])
+
+
+def call_llm(messages: list[dict], *, tools: list[dict] | None = None, temperature: float = 0.7,
+              pinned: str | None = None) -> dict:
+    """统一 LLM 调用，按 active_chain 顺序故障转移。返回 message 内容与实际使用的模型名。
+
+    pinned 把指定模型提到链首，**只影响第一次尝试**：它失败仍照常降级到链上其余模型。
+    用于写文案这种「模型强弱直接决定产出质量」的调用——链首那几个免费小模型写简历
+    只会产出套话，让容灾链顺序决定这类调用的质量是不合适的。
+    """
     import logging
     logger = logging.getLogger("argus.llm")
+    chain = active_chain()
+    if pinned:
+        chain = sorted(chain, key=lambda item: item["name"] != pinned)
     last_err = None
     tokens = _input_tokens(messages, tools)
-    for item in active_chain():
+    for item in chain:
         model_name = item["name"]
         limit = item.get("max_input_tokens")
         if limit and tokens > limit:

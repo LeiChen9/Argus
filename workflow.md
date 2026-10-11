@@ -24,9 +24,13 @@ Practice→ S5 Career 级面试 playbook + job 级 delta
 | --- | --- | --- |
 | **事实源** | `backend/persona.json` | 不可删，只增。每条经历带 `source`（上传 / 追问） |
 | **岗位侧** | `data/careers.json` | 与人无关。Career 定义 + `job_id → career` 映射 |
-| **派生物** | `data/resumes/{career}.md`<br>`data/playbooks/{career}.json` | 可随时删了重生成 |
+| **用户的文件** | `data/resumes/{career}.json` | 6 个 Career 各一份底稿（逐字拷 persona 去掉求职意向），
+  **用户亲手改**。改过之后删掉就是删掉他的劳动，别当缓存清。 |
 
 承重的一句话：**Career 定义变了，已生成的简历立刻作废，但 persona 不受影响。**
+——但这句话只在简历还是「派生物」时成立。现在简历是用户的文件，
+改简历由他自己在 Resume 页动手，AI 只出建议不落盘（见 `dev_log.md` 2026-10-11）。
+`data/playbooks/{career}.json`（S5 面试 playbook）仍是可随时删了重生成的派生物。
 
 派生物和事实源分开是唯一的结构性约束：LLM 改了 Career 定义时，
 `boss_jobs.json` 和 persona 都不能跟着漂。
@@ -47,7 +51,12 @@ prompt 里写「不要编造」是自觉，不是检查；`source` 字段让追�
 | **S1** 建 Career | 存活 job 的 JD | 1 次 LLM 读全部 JD → Career 定义 + 归属 | `careers.json` | **人可编辑** | 逐个读：内里像不像一类，彼此分得开吗 |
 | **S2** Career × persona | Career 要求 + persona | 1 次 LLM / Career | Career 级 gap + **追问清单** + 表达建议 | 人决定投哪几个 Career | 追问清单每条是否真的指向某段经历 |
 | **S3** 补 persona | 追问清单 | 用户作答 | persona 增条，带 `source` | 必须人回答 | 新经历能否追溯到具体回答 |
-| **S4** 简历 | persona + Career 要求 | 1 次 LLM / Career | `resumes/{career}.md` | 人读 | **逐行追溯**到 persona 一条 |
+| **S4** 简历 | persona + Career 要求 | **零 LLM** | `resumes/{career}.json`，用户在 Resume 页亲手改 | 人读 | 逐行追溯到 persona 一条（`source` 字段） |
+
+S4 不再调 LLM：简历是用户的文件，不是 AI 的产物。AI 在简历上只剩两个动作——
+**问**（S2 的追问清单）和**评**（`critique_resume`，筛简历那步，只读不写）。
+改简历的请求只在用户点「提交」时才发（`POST /api/resumes/{id}/edits`），
+详见 `dev_log.md` 2026-10-11。
 | **S5** 面试 | 简历 + Career 要求 + 本岗 JD | 1 次 LLM / Career + 轻量 diff / 岗 | playbook + per-job delta | 人读 | playbook 里的问题你自己答得上来吗 |
 
 ### S0 硬过滤
@@ -90,7 +99,14 @@ S2 就生成简历的话，它只能在旧 persona 上做重排，
 
 ### S4 简历
 
-等 S3 之后再生成。硬约束：每行可追溯到 persona 一条事实。
+**简历是用户的文件，不是 AI 的产物。** 每个 Career 默认一份底稿（`ensure_all`，
+逐字拷 persona 去掉求职意向，零 LLM），用户在 Resume 页亲手改。
+AI 在简历上只剩两个动作：**问**（S2 的追问清单）和**评**（`critique_resume`）。
+改简历的请求只在用户点「提交」时才发，取消不触发任何网络请求。
+
+硬约束：每行可追溯到 persona 一条事实（`source` 字段核对，不靠 prompt 自觉）。
+底稿由 `copy_from_persona` 逐字拷贝，所以追溯是自动成立的——用户改的是他自己的文件，
+改完的每一行仍然来自 persona 里那条事实。
 
 ### S5 面试
 
@@ -164,8 +180,10 @@ persona 是用户**自己上传的、他觉得做得好的项目集合**。它�
 - **追问清单的载体**：CLI 脚本 / Chat UI（复用 `backend/chat.py`）/ 手工填 JSON。
   决定 S3 要不要碰 `backend/`，与 S0–S2 无关，可以最后再定。
 - **Career 的数量上界**：30 个岗位预计落 4–6 个职能 Career。上界未定，
-  影响 S2 和 S4 的调用次数。
-- **简历版本管理**：`resumes/{career}.md` 覆盖还是留档。
-  （与 `tech_doc.md` 里 `job_gaps.json` 的同一个未决问题同源。）
+  影响 S2 的调用次数。S4 不再调 LLM（简历是用户自己写的），所以数量只影响
+  用户要改几份，不影响成本。
+- **简历版本管理**：已定。`resumes/{career}.json` **覆盖式**，但每次改动追加一条
+  `edits` 记录（时间 / 原因 / 改了哪些 path），不单独留档。
+  用户点「取消」时不发请求，未提交的改动直接丢弃——**没有撤销**。
 - **选哪几个 Career 投入 S3/S4**：由人决定，LLM 只给证据。
   Career 多了会做多份没人用的简历。

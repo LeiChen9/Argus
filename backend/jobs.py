@@ -10,8 +10,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
-from common import save_json_file
 from persona import TARGET_KEYS, get_persona
+from utils import save_file
 
 router = APIRouter()
 
@@ -65,7 +65,7 @@ def save_snapshot(cards: list[dict], keyword: str) -> None:
         "jobs": {c["id"]: c for c in filtered},
     }
     STORE.parent.mkdir(exist_ok=True)
-    save_json_file(STORE, json.dumps(store, ensure_ascii=False, indent=2))
+    save_file(STORE, store)
 
 
 def gaps_by_job() -> dict:

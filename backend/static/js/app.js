@@ -3,9 +3,11 @@ import { go } from "./nav.js";
 import { loadJobs } from "./jobs.js";
 import { loadCareer } from "./career.js";
 import { initJobDetail } from "./job.js";
+import { loadResume, initResumeDetail } from "./resumepage.js";
 import "./chat.js";
 
 initJobDetail();
+initResumeDetail();
 
 const el = document.getElementById("greeting");
 
@@ -25,6 +27,7 @@ for (const tab of document.querySelectorAll(".tab")) {
   tab.addEventListener("click", () => {
     if (tab.getAttribute("aria-selected") === "true") return;
     go(tab.dataset.view);
+    if (tab.dataset.view === "resume") loadResume();
     if (tab.dataset.view === "jobs") loadJobs();
     if (tab.dataset.view === "career") loadCareer();
   });

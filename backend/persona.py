@@ -18,13 +18,8 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from common import (
-    GEMINI_MODEL,
-    clean_llm_json,
-    llm_client,
-    load_json_file,
-    save_json_file,
-)
+from common import GEMINI_MODEL, clean_llm_json, llm_client
+from utils import load_file, save_file
 
 logger = logging.getLogger("argus.persona")
 
@@ -88,7 +83,7 @@ def get_persona() -> dict:
     if _persona is not None:
         return _persona
     if STORE_PATH.exists():
-        _persona = load_json_file(STORE_PATH)
+        _persona = load_file(STORE_PATH)
         return _persona
     _persona = {}
     return _persona
@@ -115,7 +110,7 @@ def save_persona(data: dict) -> dict:
     """更新内存单例并落盘。返回存入的数据本身，方便链式。"""
     global _persona
     _persona = data
-    save_json_file(STORE_PATH, json.dumps(data, ensure_ascii=False, indent=2))
+    save_file(STORE_PATH, data)
     return data
 
 

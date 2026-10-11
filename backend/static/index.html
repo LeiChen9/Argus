@@ -76,6 +76,30 @@
       </div>
     </section>
 
+    <!-- ── Resume：用户自己的简历（tabbar 在 Chat 和 Jobs 之间） ── -->
+    <section class="view view--resume" id="view-resume" hidden>
+      <p class="rlist__note">简历是你的，改动只在你亲手保存时发生。AI 只负责追问和评价。</p>
+      <div class="rlist" id="resume-list">
+        <p class="placeholder__note">加载中…</p>
+      </div>
+    </section>
+
+    <!-- ── 简历详情：hash 路由 #resume/<career_id> ── -->
+    <section class="view view--resumedit" id="view-resumedit" hidden>
+      <div class="jdetail">
+        <header class="jdetail__head">
+          <button class="jdetail__back" id="resume-back" type="button" aria-label="返回">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M14.5 5.5 8 12l6.5 6.5" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <span class="jdetail__htitle" id="resume-htitle">简历</span>
+        </header>
+        <div class="jdetail__body" id="resume-body"></div>
+      </div>
+    </section>
+
     <!-- ── Jobs：持久化的岗位卡片 ── -->
     <section class="view view--jobs" id="view-jobs" hidden>
       <p class="jobs__meta" id="jobs-meta"></p>
@@ -125,6 +149,16 @@
         <path d="M9 4.5h10a6 6 0 0 1 6 6v3.5a6 6 0 0 1-6 6h-3.6l-5.4 3.2V20H9a6 6 0 0 1-6-6v-3.5a6 6 0 0 1 6-6Z" fill="currentColor"/>
       </svg>
       <span>Chat</span>
+    </button>
+
+    <button class="tab" role="tab" data-view="resume" aria-selected="false" aria-controls="view-resume">
+      <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
+        <path d="M7.5 4.5h9.2L22 9.8v13.7a1 1 0 0 1-1 1H7.5a1 1 0 0 1-1-1v-18a1 1 0 0 1 1-1Z"
+              stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" opacity=".42"/>
+        <path d="M16.4 4.6v4.9a1 1 0 0 0 1 1h4.4" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" opacity=".42"/>
+        <path d="M10.6 14h7M10.6 17.6h7M10.6 21.2h4.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+      <span>Resume</span>
     </button>
 
     <button class="tab" role="tab" data-view="jobs" aria-selected="false" aria-controls="view-jobs">

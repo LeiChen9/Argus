@@ -1,5 +1,6 @@
 import { go } from "./nav.js";
 import { jobCards } from "./cards.js";
+import { resumeCard } from "./resume.js";
 
 const msgs = document.getElementById("msgs");
 const form = document.getElementById("composer");
@@ -60,11 +61,28 @@ const showTyping = () => {
   return show(row("them", null, bubble));
 };
 
+// 简历卡是**一个槽位**，每轮返回的简历覆盖上一版，不是每轮追加一张新卡。
+// 简历是同一份东西的迭代，并排摆一堆只会让人分不清哪版是现在的。
+let resumeNode = null;
+
+const showResume = (data) => {
+  const card = resumeCard(data);
+  if (resumeNode) resumeNode.replaceWith(card);
+  else show(card);
+  resumeNode = card;
+  msgs.scrollTop = msgs.scrollHeight;
+};
+
+const clearResume = () => {
+  resumeNode?.remove();
+  resumeNode = null;
+};
+
 document.getElementById("chat-back").addEventListener("click", () => go("home"));
 
 // 清空对话上下文。后端历史是内存单例，清掉重启也一样，所以不做二次确认——
 // 说错了重来一遍的成本，远低于点一次「确认」的摩擦。清完把气泡也清掉，
-// 留一句 Argus 的话，不然界面空得突兀。
+// 留一句 Argus 的话，不然界面空得突兀。清空会一并退出简历模式，简历卡也收掉。
 document.getElementById("chat-clear").addEventListener("click", async () => {
   try {
     await fetch("/api/chat/clear", { method: "POST" });
@@ -73,6 +91,7 @@ document.getElementById("chat-clear").addEventListener("click", async () => {
     return;
   }
   msgs.replaceChildren(row("them", "好，我们重新聊。"));
+  clearResume();
 });
 
 form.addEventListener("submit", async (event) => {
@@ -122,6 +141,7 @@ form.addEventListener("submit", async (event) => {
     }
     showReply(data.reply);
     if (data.jobs?.length) show(row("them", null, jobCards(data.jobs)));
+    if (data.resume) showResume(data.resume);
   } catch (err) {
     show(row("them", `我说不了话：${err.message}`));
   } finally {

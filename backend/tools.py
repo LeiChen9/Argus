@@ -5,8 +5,9 @@
 chat.py 决定「有哪些工具、怎么注册」，tools.py 决定「工具被调用时干什么」。
 
 - 四个只读工具：直接读 data/ 下的文件，不经 jobs.py 的路由函数
-- search_jobs：搜岗位，唯一会写 data/ 的工具（落 boss_jobs.json 覆盖快照），
-  暂时停用没注册，实现留着
+- 简历三个工具：建 / 读 / 评，见 resume.py。**没有写简历的工具**——他自己改；
+  @tool 外壳统一收异常
+- search_jobs：搜岗位，唯一会写 data/ 事实源的暂用工具，暂时停用没注册，实现留着
 - auto_compact：会话内存的 token 阈值压缩，由 /api/chat 在发请求前调，
   **不进 TOOLS**——压缩若是模型可选行为，模型不调就不压，阈值形同虚设
 
@@ -15,11 +16,19 @@ data/ 是事实源，工具只读不写。新增工具在此实现，再到 chat
 
 import json
 import logging
-from pathlib import Path
 
 from common import call_llm, _input_tokens
 from persona import get_persona
 from jobs import gaps_by_job, normalize, save_snapshot, CAREERS, GAPS
+# 领域侧叫 copy_from_persona / critique，工具侧带 resume 后缀。两边不同名，
+# 工具函数体里调领域函数时才不会被自己遮住。
+from resume import (
+    CAREERS,
+    RESUME_DIR,
+    copy_from_persona,
+    critique,
+)
+from utils import load_file, tool
 from crawler import fetch_liepin_html, parse_jobs, fetch_boss_recommendations, fetch_boss_details
 
 logger = logging.getLogger("argus.tools")
@@ -28,14 +37,20 @@ logger = logging.getLogger("argus.tools")
 # ── 四个只读工具 ─────────────────────────────────────────────────────────
 
 
+@tool
 def read_persona() -> dict:
-    """读简历与求职意向。没上传过时回 empty，让模型直接问用户要简历。"""
+    """读用户**最初上传的那份**履历与求职意向。没上传过时回 empty，让模型直接问用户要简历。
+
+    与简历（read_resume）分家：他上传的是初稿，之后他在 Resume 页自己改的是另一份文件，
+    两边会分叉。用户改完简历后，这里仍是旧版——不要拿它当"他现在的简历"说话。
+    """
     data = get_persona()
     if not data:
         return {"status": "empty", "detail": "用户还没上传简历"}
     return {"status": "ok", "persona": data}
 
 
+@tool
 def read_careers() -> dict:
     """Career 全量：定位、归属判据、能力清单、成员岗位。6 个 Career 一次读完，
     模型才能横向比较。只回 careers 数组，generated_at 之类的元信息对回答没用。"""
@@ -45,6 +60,7 @@ def read_careers() -> dict:
     return {"status": "ok", "careers": doc.get("careers", [])}
 
 
+@tool
 def read_gaps_index() -> dict:
     """岗位 × persona 差距解读的索引。全量 438KB 读不动，先只给
     公司/岗位/薪资/地点，模型挑中哪个再用 job_id 读单条全文。"""
@@ -67,6 +83,7 @@ def read_gaps_index() -> dict:
     }
 
 
+@tool
 def read_gap(job_id: str) -> dict:
     """单个岗位的完整解读：每条要求与 persona 的匹配状态、缺什么、简历里的证据。
     带上跑分析时的求职意向快照——不然模型无从判断「对齐」是对齐到什么。"""
@@ -76,8 +93,76 @@ def read_gap(job_id: str) -> dict:
     return {"status": "ok", **row}
 
 
+# ── 简历三段 ───────────────────────────────────────────────────────────────
+# 触发方式是 agent 自己调 start_resume——没有按钮。用户什么时候想投哪个职能，该由
+# 对话里判断出来，不该被某个 UI 动作决定。
+#
+# 这里只有「建 / 读 / 评」三个动作，没有「写」。改简历是用户自己在 Resume 页做的事：
+# LLM 不碰这份文件，apply_patch 那一层留给用户手改时走（见 chat.py 的 /api/resumes/*/edits）。
+
+
+@tool
+def start_resume(career_id: str) -> dict:
+    """切到「为这个职能准备简历」模式。返回职能要求 + 现有材料的提纲，
+    够 agent 立刻开始对着问，不用再回头翻别的文件。"""
+    careers = load_file(CAREERS)["careers"]
+    if career_id not in {c["career_id"] for c in careers}:
+        raise KeyError(f"没有 {career_id} 这个 Career，现有的有：{' '.join(c['career_id'] for c in careers)}")
+    career = next(c for c in careers if c["career_id"] == career_id)
+    persona = get_persona()
+    out = {
+        "status": "ok",
+        "career": {k: career.get(k) for k in ("career_id", "name", "positioning")},
+        "capabilities": career.get("capabilities", []),
+        "已知的经历": [
+            {"公司": w.get("company"), "职位": w.get("role"),
+             "起止": f"{w.get('start_date', '')}–{w.get('end_date', '')}",
+             "已写的项目": [p.get("name", "") for p in w.get("projects", [])]}
+            for w in persona.get("work_history", [])
+        ],
+        "已知的技能": persona.get("skills", []),
+        "提醒": "以上是他自己写的，只写了自以为拿得出手的部分。据此开始提问。",
+    }
+    # 没有简历就先有一份：persona 去掉求职意向，逐字拷贝，不调 LLM。
+    if load_file(RESUME_DIR / f"{career_id}.json"):
+        out["简历"] = "已存在，直接读它继续"
+    else:
+        copy_from_persona(career_id)
+        out["简历"] = "已按 persona 建好底稿（去掉求职意向）。他不提就别催——改是他自己的事"
+    return out
+
+
+@tool
+def read_resume(career_id: str) -> dict:
+    """读简历全文。没建过就报错——先调 start_resume 建一份。
+
+    这份是**他自己改过的当前版本**，跟 read_persona（最初上传的初稿）不是一回事。
+    """
+    saved = load_file(RESUME_DIR / f"{career_id}.json")
+    if not saved:
+        raise FileNotFoundError(f"{career_id} 还没有简历，先调 start_resume 建一份")
+    # 剥掉 edits，同 resume.body：它是改动历史不是简历材料，喂回去模型会照着
+    # 上次的 path 再改一遍。前端不受影响——它走 chat._resume_card，那份要留着。
+    return {"status": "ok",
+            "resume": {k: v for k, v in saved["resume"].items() if k != "edits"}}
+
+
+@tool
+def critique_resume(career_id: str) -> dict:
+    """筛简历。返回筛选结论、可改的地方、以及只能继续挖的缺口。
+
+    history 留档但不回喂：全量带进上下文会按筛选次数线性涨，且旧报告里的 path 是
+    照着当时的简历写的，照着改会打错位置。只给最新一份和次数。
+
+    报告是**写给他看的建议**，不是待执行的改动——他自己动手改，模型不碰他的文件。
+    """
+    review = critique(career_id).get("review", {})
+    return {"status": "ok", **{k: v for k, v in review.items() if k != "history"},
+            "历次筛选次数": len(review.get("history", []))}
+
+
 # search_boss_jobs 暂时停用：没注册进 chat.TOOLS，实现留着，想开回来把它加进
-# TOOLS 即可。它是唯一会写 data/ 的工具（落 boss_jobs.json 覆盖快照）。
+# TOOLS 即可。它是唯一会写 data/ 事实源的已注册工具（落 boss_jobs.json 覆盖快照）。
 def search_jobs(keyword: str) -> tuple[dict, list[dict] | None]:
     try:
         raws = fetch_boss_recommendations(max_batches=1, timeout=25)

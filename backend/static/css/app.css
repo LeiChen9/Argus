@@ -602,6 +602,163 @@ button { font: inherit; color: inherit; }
 /* 岗位轨道嵌在 Career 卡片的折叠里，复用 cards.js 的横滑轨道，只补一条上间距 */
 .view--career .jobcards { margin-top: 10px; }
 
+/* ── Resume 页 ── */
+.view--resume {
+  display: block;
+  overflow-y: auto;
+  padding: 18px 18px 40px;
+}
+.rlist__note { margin: 0 0 12px; font-size: 13px; line-height: 1.6; color: var(--ink-3); }
+.rlist .placeholder__note { text-align: center; }
+
+.rlist { display: flex; flex-direction: column; gap: 10px; }
+.rrow {
+  display: block;
+  width: 100%;
+  padding: 13px 16px 12px;
+  border: 0.5px solid var(--hairline);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(58, 46, 34, 0.06);
+  text-align: left;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+.rrow:active { transform: scale(0.99); }
+.rrow__head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.rrow__name { font-size: 15.5px; font-weight: 700; color: var(--ink); }
+.rrow__at { flex: none; font-size: 12px; color: var(--ink-3); }
+.rrow__sub { margin: 4px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-3); }
+
+/* ── 简历详情：复用岗位详情那套 header + body 滚动容器 ── */
+.view--resumedit { display: block; }
+
+/* 用户亲手改的部分。输入框一律无边框、只在聚焦时描边——它长得像一张纸，
+   不像一堆待办。留白大一点，简历正文本来就长。 */
+.redit__work { margin: 0 0 14px; padding: 12px 14px; border: 0.5px solid var(--hairline); border-radius: 12px; background: #fff; }
+.redit__co, .redit__role, .redit__date, .redit__name, .redit__area, .redit__addskill {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  font: inherit;
+  color: var(--ink);
+  -webkit-appearance: none;
+}
+.redit__co:focus, .redit__role:focus, .redit__date:focus, .redit__name:focus,
+.redit__area:focus, .redit__addskill:focus { border-color: var(--accent); background: #fff; }
+.redit__co { font-size: 15px; font-weight: 700; }
+.redit__role { font-size: 13.5px; color: var(--ink-2); }
+.redit__date { display: inline-block; width: 7.2em; font-size: 12.5px; color: var(--ink-3); }
+.redit__proj { position: relative; margin: 10px 0 0; padding: 8px 0 0; border-top: 0.5px solid var(--hairline); }
+.redit__name { font-size: 13.5px; font-weight: 600; padding-right: 34px; }
+.redit__area { min-height: 4.6em; font-size: 13px; line-height: 1.65; resize: vertical; }
+/* 垃圾桶图标压在项目块右上角。要绝对定位：早先用 float + 负 margin，按钮被下面的
+   textarea 盖住、点击全被吃掉，每个项目的「删」都是死的。 */
+.redit__proj > .redit__ib { position: absolute; top: 5px; right: 0; }
+
+.redit__add {
+  margin-top: 10px;
+  padding: 5px 8px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.redit__add:active { opacity: .5; }
+
+.redit__sect { margin: 0 0 14px; padding: 12px 14px; border: 0.5px solid var(--hairline); border-radius: 12px; background: #fff; }
+.redit__h { margin: 0 0 6px; font-size: 13px; font-weight: 700; color: var(--ink-2); }
+.redit__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.redit__skill { display: inline-flex; align-items: center; gap: 1px; padding: 3px 3px 3px 9px; border-radius: 999px; background: var(--glow); font-size: 12.5px; color: var(--ink-2); }
+.redit__skill i { font-style: normal; }
+.redit__addskill { width: 8em; margin-top: 4px; font-size: 12.5px; }
+.redit__edu { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.redit__edu .redit__co { flex: 1 1 8em; }
+
+/* 卡片右上角那条：平时一个 Edit 图标，正在改就换成 取消 / 提交。 */
+.redit__bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-height: 30px;
+  margin: -2px -4px 2px;
+}
+.redit__bar .redit__h { margin: 0 auto 0 0; }
+
+/* 图标按钮：平时透明，点了才出边框。删除是破坏性的，给它一个红，别混在
+   中性的图标堆里让人滑过去。 */
+.redit__ib {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.redit__ib svg { width: 17px; height: 17px; }
+.redit__ib:active { border-color: var(--hairline); background: var(--glow); color: var(--ink); }
+.redit__ib.is-trash { color: #b4442f; }
+.redit__ib.is-trash.is-mini { width: 22px; height: 22px; }
+.redit__ib.is-trash.is-mini svg { width: 14px; height: 14px; }
+
+/* 删掉整段经历：按钮带图标 + 文字，跟上面「垃圾桶」图标区分开——这个一按就没了
+   几年经历，所以要二次确认（逻辑在 resume.js 的 drop()）。 */
+.redit__drop {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 14px;
+  padding: 5px 8px 5px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-3);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.redit__drop svg { width: 15px; height: 15px; }
+.redit__drop:active { background: var(--glow); }
+.redit__drop[data-arm] { background: #b4442f; color: #fff; font-weight: 600; }
+
+.redit__txt, .redit__ok {
+  padding: 5px 12px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.redit__txt { background: var(--glow); color: var(--ink-2); }
+.redit__ok { background: var(--accent); color: var(--on-accent); }
+.redit__txt:active { opacity: .6; }
+.redit__ok:active { opacity: .75; }
+
+/* 只读态：复用 Chat 卡片那套 rcard__work，但不要它那条分隔线——卡片外面已经有一圈了。 */
+.redit__work > .rcard__work { margin-top: 0; padding-top: 0; border-top: 0; }
+.redit__eduline { margin: 4px 0; font-size: 13px; color: var(--ink-2); }
+.redit__skill.is-plain { padding-right: 9px; }
+
+.redit__status { margin: 10px 2px 0; min-height: 1.2em; font-size: 12px; color: var(--ink-3); }
+.redit__status.is-bad { color: #b4442f; }
+
 /* ── 岗位卡片：Chat 气泡内横滑轨道，Jobs 页直接排网格 ── */
 .jobcards {
   display: flex;
@@ -1112,6 +1269,64 @@ details[open] > .ai__sum .ai__chev { transform: rotate(-135deg) translate(-2px, 
 
 /* clipboard 不可用时的临时选中框 */
 .ai__ta { position: fixed; top: -1000px; opacity: 0; }
+
+/* ── 简历卡片 ── */
+.rcard {
+  margin: 14px 0;
+  padding: 14px;
+  border: 0.5px solid var(--hairline);
+  border-radius: 12px;
+  background: #fff;
+}
+.rcard__head,
+.rcard__linktop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.rcard__cname,
+.rcard__linkttl { font-size: 14px; font-weight: 700; color: var(--ink); }
+.rcard__at { font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.rcard__v {
+  display: inline-block;
+  margin: 8px 8px 0 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-style: normal;
+  color: var(--ink-2);
+  background: var(--glow);
+}
+.rcard__v.is-in   { color: #2e6b4f; background: rgba(46, 107, 79, .12); }
+.rcard__v.is-edge { color: var(--accent); background: var(--glow); }
+.rcard__v.is-out  { color: #9c4038; background: rgba(156, 64, 56, .12); }
+.rcard__line { margin: 6px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--ink-2); }
+.rcard__work { margin: 12px 0 0; padding-top: 10px; border-top: 0.5px solid var(--hairline); }
+.rcard__role { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.rcard__span { margin: 2px 0 0; font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.rcard__projs { margin: 6px 0 0; padding-left: 16px; }
+.rcard__proj { margin: 4px 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-2); }
+.rcard__proj strong { color: var(--ink); font-weight: 600; }
+.rcard__tags { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-2); }
+.rcard__gaps { margin: 0; padding-left: 16px; }
+.rcard__gaps li { margin: 4px 0; font-size: 12.5px; line-height: 1.55; color: var(--ink-2); }
+.rcard__gapn { margin: 6px 0 0; font-size: 11.5px; color: var(--accent); }
+.rcard__edit { margin: 12px 0 0; font-size: 11px; color: var(--ink-3); }
+
+.rcard__link {
+  display: block;
+  width: 100%;
+  margin: 8px 0 2px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--hairline);
+  border-radius: 10px;
+  background: rgba(139, 111, 71, .05);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rcard__link:active { transform: scale(0.99); }
 
 /* ── Reduced motion ── */
 @media (prefers-reduced-motion: reduce) {

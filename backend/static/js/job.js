@@ -130,10 +130,16 @@ export const initJobDetail = () => {
   });
   addEventListener("hashchange", () => {
     const id = idFromHash();
-    if (!id) return close();
-    // 锚点点击已经压了一条历史，这里只补 state，让返回键知道该往回退。
-    history.replaceState({ job: id }, "", `#job/${encodeURIComponent(id)}`);
-    show(id);
+    if (id) {
+      // 锚点点击已经压了一条历史，这里只补 state，让返回键知道该往回退。
+      history.replaceState({ job: id }, "", `#job/${encodeURIComponent(id)}`);
+      return show(id);
+    }
+    // **不是我的 hash，不等于「关闭」。** 简历详情也走 hash 路由（#resume/<id>），
+    // 两个 handler 监听同一个事件：这里要是照旧把 hash 清掉再 navBack，Resume 页
+    // 点开的一瞬就被抹平了。只有空 hash 才是真的退出详情页。
+    if (location.hash) return;
+    close();
   });
   const id = idFromHash();
   if (id) show(id);

@@ -426,7 +426,7 @@ Chat 是主 Agent loop：system prompt 里只有工具说明，**所有事实都
 
 | 工具 | 返回 | 大小 |
 |---|---|---|
-| `read_persona` | 简历与求职意向（经历、项目、技能、意向职位/城市/薪资） | 4KB |
+| `read_persona` | 用户**最初上传的那份**履历与求职意向（经历、项目、技能、意向职位/城市/薪资） | 4KB |
 | `read_careers` | 6 个 Career 的定位、归属判据、能力清单、成员岗位，全量 | 19KB |
 | `read_job_gaps` | 岗位 × persona 差距解读的**索引**（公司/岗位/薪资/地点） | 5KB |
 | `read_job_gap(job_id)` | 单个岗位的完整解读：每条要求的匹配状态、缺什么、简历证据 | ~12KB |
@@ -497,10 +497,38 @@ Chat 是主 Agent loop：system prompt 里只有工具说明，**所有事实都
 先查 `READERS` 再落到旧分支——不加这个字典，读工具会被旧代码当成 `search_boss_jobs`
 去搜岗位。
 
-`search_jobs` 是**唯一会写 `data/` 的工具**（落 `boss_jobs.json` 覆盖快照），
-其余四个只读不写。
+`search_jobs` 是**唯一会写 `data/` 事实源的工具**（落 `boss_jobs.json` 覆盖快照），
+其余只读工具不写。另有一类写的是 `data/resumes/`——`copy_from_persona` 建底稿、
+`apply_edits` 改正文，但**触发者是用户不是 LLM**（见下节）。
 
-## 约定
+## Resume 页与简历所有权（2026-10-11）
+
+**简历是用户的文件，不是 AI 的产物。** AI 在简历上只剩两个动作：**问**（S2 的追问清单）
+和**评**（`critique_resume`，筛简历那步，只读不写）。`draft()` / `rewrite()` 已删，
+`draft_resume` / `rewrite_resume` / `apply_resume_edits` 三个工具从 `TOOLS` 摘掉，
+工具从 9 个降到 7 个。
+
+**上下文里永远是最新的。** 进简历模式后，简历正文进 **system prompt** 而不是 history——
+`auto_compact` 压的是 history，贴进去会被压成摘要，模型就拿着改之前的旧版本跟用户讨论。
+每轮现读磁盘，尾部带一句「你在这段对话里读到的、记下的任何简历内容一律作废」。
+顺带把 `read_persona` 描述改成「他**最初上传的那份**」：用户改完简历后 persona 与
+简历会分叉，模型最可能在这里出精神错乱。
+
+**Resume 页**（tabbar：Chat | **Resume** | Jobs | Career | Me）：
+- 每个 Career 默认一份底稿（`ensure_all`，逐字拷 persona 去掉求职意向，**零 LLM**）
+- 卡片平时只读，右上角 Edit 图标；点开才变成输入框，改完点「提交」才发请求
+- **不挂 AI 评语**——评语是 Argus 在 Chat 里说的话
+- 删除换成垃圾桶图标；删整段经历要点两次（3 秒后自动复原）
+
+**patch 机制保留，触发者从 LLM 变成用户。** `apply_edits` 现在唯一的调用方是
+`POST /api/resumes/{id}/edits`，前端表单把字段换算成 ops 发过来。
+结构化表单天生知道「用户改的是哪个 JSON Pointer」，所以它没进冷冻室。
+
+**前端按「谁消费它」拆成两份**，跟 `cards.js` / `job.js` 一个路子：
+- `resume.js`——共享件：Chat 全文卡、Career 软链、索引拉取（`loadIndex`）、只读渲染（`work`）
+- `resumepage.js`——Resume 页：列表、详情、编辑器、hash 路由
+
+### 约定
 
 - `StaticFiles` mount在 `/` **必须放在所有 API 路由声明之后**，否则会遮蔽它们。
 - **静态资源一律 `Cache-Control: no-store`**（`main.py` 中间件）。不设这个头时浏览器

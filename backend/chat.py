@@ -20,7 +20,7 @@ from common import render_markdown, call_llm
 from utils import load_file
 from tools import (
     auto_compact, read_persona, read_careers, read_gaps_index, read_gap, search_jobs,
-    start_resume, read_resume, critique_resume,
+    start_resume, read_resume, critique_resume, analyze_jd,
 )
 from persona import get_persona, init_persona_from_text, read_upload, save_targets
 # load 而不是 read_resume：上面已经从 tools 引了一个同名的包装函数。
@@ -50,6 +50,8 @@ read_job_gaps（哪些岗位已有差距解读）、read_job_gap（某个岗位�
 
 读完直接回答用户关心的事，不要罗列你读了哪些文件、也不要复述文件里的原始结构。
 每次只输出一两句话。不要长篇大论。
+
+用户**贴来一份岗位 JD**时，调 analyze_jd 判断是否合适，并把开场白一并给他。
 
 **简历**：用户想为某个职能准备简历时（不管是他说「我想投经营分析」还是「帮我改改简历」），
 你自己判断该针对哪个职能，调 start_resume 开始跟他聊——不要问用户要点哪个按钮。
@@ -142,6 +144,18 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "analyze_jd",
+            "description": "用户贴来一份岗位 JD 时调它：对比他的 Persona 判断这个岗位是否合适，并给出一段招聘平台上打招呼的开场白。JD 原文从用户消息里取，原样传入，不要自己编。",
+            "parameters": {
+                "type": "object",
+                "properties": {"jd": {"type": "string", "description": "用户贴来的岗位 JD 原文"}},
+                "required": ["jd"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "start_resume",
             "description": "开始为某个职能准备简历。这个职能还没有简历时，会按他自己传的那份履历（去掉求职意向）建一份底稿。返回该职能的定位与能力要求、以及他现有材料的提纲，够你据此开始提问。用户想投某个职能时调它，不要问用户要点哪个按钮。简历之后由他自己去 Resume 页改，你不碰它。",
             "parameters": {
@@ -185,6 +199,7 @@ READERS = {
     "read_careers": read_careers,
     "read_job_gaps": read_gaps_index,
     "read_job_gap": read_gap,
+    "analyze_jd": analyze_jd,
 }
 
 # start_resume 会切模式，所以它不能走 READERS 的纯函数分派：它要改全局 _resume_career。

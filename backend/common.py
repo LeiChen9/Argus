@@ -1,7 +1,7 @@
 """底层工具：只放 IO 与.env 读取，不含任何业务。
 
 - read_env_key: 从项目根 .env 读 key
-- llm_client: 走 Gemini 的 OpenAI 兼容端点，chat 和 persona 共用
+- llm_client / agnes_client / kilo_client / groq_client: 各家 OpenAI 兼容端点，chat 和 persona 共用
 - active_chain / call_llm: 模型容灾链，按 active_chain 顺序故障转移
 - load_json_file / save_json_file: persona.json 落盘底层
 - clean_llm_json: 去 markdown 代码块后解析 JSON
@@ -14,7 +14,7 @@ from datetime import datetime
 from functools import cache
 from pathlib import Path
 
-from chinese_calendar import is_holiday, is_workday
+from chinese_calendar import is_holiday
 from markdown_it import MarkdownIt
 from openai import OpenAI
 
@@ -70,6 +70,54 @@ def deepseek_client() -> OpenAI:
     )
 
 
+@cache
+def agnes_client() -> OpenAI:
+    """Agnes 免费端点。"""
+    return OpenAI(
+        api_key=read_env_key("agnes_apiKey"),
+        base_url="https://apihub.agnes-ai.com/v1/",
+    )
+
+
+@cache
+def kilo_client() -> OpenAI:
+    """Kilo 网关，托管 openrouter 的免费模型。模型名要写全，group 别名会解析到别的模型。"""
+    return OpenAI(
+        api_key=read_env_key("kilo_apiKey"),
+        base_url="https://api.kilo.ai/api/gateway/",
+    )
+
+
+@cache
+def groq_client() -> OpenAI:
+    """Groq 免费端点。只能走系统代理，直连会被 403。"""
+    return OpenAI(
+        api_key=read_env_key("groq_apiKey"),
+        base_url="https://api.groq.com/openai/v1/",
+    )
+
+
+# Groq 免费层输入上限 8000 token/分钟，超了直接 413。crawler 那种 2 万 token 的
+# 抽取请求会被 Groq 连拒三次再降级到 Gemini，白等约 1 秒——按 token 数提前跳过。
+GROQ_MAX_INPUT_TOKENS = 7000
+
+
+@cache
+def _token_counter():
+    import tiktoken
+
+    return tiktoken.get_encoding("o200k_base")
+
+
+def _input_tokens(messages: list[dict], tools: list[dict] | None) -> int:
+    """估算输入 token 数。o200k_base 对 Groq 的 tokenizer 是近似，闸门够用。"""
+    enc = _token_counter()
+    total = sum(len(enc.encode(m.get("content") or "")) for m in messages)
+    if tools:
+        total += len(enc.encode(json.dumps(tools, ensure_ascii=False)))
+    return total
+
+
 # ── DeepSeek 开放时段 ──────────────────────────────────────────────────────
 # DeepSeek 不是 7×24 可用：北京时间周一至周五（法定节假日除外）9:00-12:00、
 # 14:00-18:00 为高峰，峰段调用会被限流。先判时段再入链，而不是失败后重试。
@@ -78,19 +126,29 @@ DEEPSEEK_PEAK_HOURS = frozenset(range(9, 12)) | frozenset(range(14, 18))
 
 
 def deepseek_open(now: datetime | None = None) -> bool:
-    """DeepSeek 现在开放吗：法定节假日全天，否则工作日的非峰段小时。
+    """DeepSeek 现在开放吗：非工作日全天开放，周一至周五避开峰段。
 
-    节假日认 chinese_calendar：调休补班的周六算工作日，法定假期的周日算
-    节假日，手写 weekday() 判断两者都会判错。
+    依据 DeepSeek 计价说明：调休上班的周末与中国法定节假日全天按空闲时段计费。
+    周末无论是否补班都算这一类——chinese_calendar 把补班周六记成工作日，只认
+    is_holiday 会把它错判成普通工作日。峰段因此只作用于周一至周五。
+
+    节假日认 chinese_calendar：法定假期的周日算节假日，手写 weekday() 判断会
+    判错。
     """
     now = now or datetime.now()
-    if is_holiday(now.date()):
+    if is_holiday(now.date()) or now.weekday() >= 5:
         return True
-    return is_workday(now.date()) and now.hour not in DEEPSEEK_PEAK_HOURS
+    return now.hour not in DEEPSEEK_PEAK_HOURS
 
 
 # 模型链：按优先级排序。DeepSeek 缺 key 或不在开放时段内不入链。
 MODEL_CHAIN = [
+    {"name": "agnes-3.0-flash", "client": agnes_client},
+    {"name": "inclusionai/ling-3.1-flash", "client": kilo_client},
+    {"name": "nvidia/nemotron-3-ultra-550b-a55b:free", "client": kilo_client},
+    {"name": "openai/gpt-oss-120b", "client": groq_client, "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
+    {"name": "openai/gpt-oss-20b", "client": groq_client, "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
+    {"name": "qwen/qwen3.8-27b", "client": groq_client, "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
     {"name": GEMINI_MODEL, "client": llm_client},
     {"name": "glm-4.7-flash", "client": zhipu_client},
     {"name": DEEPSEEK_MODEL, "client": deepseek_client},
@@ -146,8 +204,13 @@ def call_llm(messages: list[dict], *, tools: list[dict] | None = None, temperatu
     import logging
     logger = logging.getLogger("argus.llm")
     last_err = None
+    tokens = _input_tokens(messages, tools)
     for item in active_chain():
         model_name = item["name"]
+        limit = item.get("max_input_tokens")
+        if limit and tokens > limit:
+            logger.info(f"跳过 {model_name}: 输入 {tokens} token 超过 {limit}")
+            continue
         client = item["client"]()
         try:
             kwargs = {"model": model_name, "messages": messages, "temperature": temperature}

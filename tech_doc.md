@@ -23,7 +23,26 @@ Last updated: 2026-10-09
 | Backend | **Python + FastAPI** | 用户指定 Python（熟悉）。FastAPI 自动出 `/docs`，Pydantic 类型化便于后续接 LLM 流式响应。 |
 | Frontend | **静态 HTML + 原生 JS** | 无构建步骤、无 node 工具链进应用路径。改完刷新即见，Phase 1 迭代最快。 |
 | Storage | **JSON 文件，无 DB、无 ORM** | 单用户单进程，慢的是 LLM 不是存储。`data/boss_jobs.json`（岗位覆盖快照）+ `backend/persona.json`（简历解析结果），都在 `.gitignore` 里 |
-| LLM Provider | 智谱 `zhipu_realtime`，key 在 `.env` | `.env` 已被 gitignore；`.env` 不入库。 |
+| LLM Provider | 多家 OpenAI 兼容端点，全部 key 在 `.env` | `.env` 已被 gitignore；`.env` 不入库。免费模型优先、付费兜底，见下方「LLM 容灾链」。 |
+
+### LLM 容灾链
+
+`common.MODEL_CHAIN` 是一个有序列表，`call_llm` 逐个试，第一个成功的即返回。
+链首全是免费模型，付费模型在后兜底：`agnes-3.0-flash` → `inclusionai/ling-3.1-flash`
+→ `nvidia/nemotron-3-ultra-550b-a55b:free`（kilo 网关）→ Groq 的 `gpt-oss-120b` /
+`gpt-oss-20b` / `qwen3.8-27b` → `gemini-3.5-flash` → `glm-4.7-flash` →
+`deepseek-v4-flash`。`active_chain` 还会把不在开放时段的 DeepSeek 剔掉。
+
+三个免费端点各有各的坑，都是实测出来的：
+
+- **Groq 直连 403**，只能走 macOS 系统代理（`127.0.0.1:8118`）。OpenAI SDK 的 httpx
+  默认 `trust_env=True`，会自动吃系统代理，所以代码里不用写代理；代理一停 Groq
+  就挂，靠 `call_llm` 的 except 兜住。
+- **Groq 输入上限 8000 token/分钟**，超了直接 413，而 `crawler.py` 每次送
+  `html[:80000]`（≈2 万 token）。所以链目支持 `max_input_tokens`，`call_llm` 用
+  tiktoken 估算后提前跳过，不去撞那三次 413。闸门只对 Groq 生效，其他模型不限。
+- **kilo 必须写全模型名**。group 别名（如 `kilo`）会解析到别的模型，且返回的
+  `content` 可能是 `None`。
 
 ### Storage 说明
 

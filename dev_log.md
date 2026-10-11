@@ -4,6 +4,33 @@
 
 ---
 
+## 2026-10-11 — Session: 免费模型扩容（agnes / kilo / groq）
+
+用户往 `.env` 加了 agnes、kilo、groq 三把 key，要把免费模型顶到容灾链前面。
+
+**做了什么**
+
+`common.py` 加 `agnes_client` / `kilo_client` / `groq_client` 三个工厂，`MODEL_CHAIN`
+链首插入 6 个免费模型（agnes-3.0-flash、ling-3.1-flash、nemotron-3-ultra:free、
+gpt-oss-120b、gpt-oss-20b、qwen3.8-27b），付费模型原样留在后面。
+`agnes-2.5-flash` 测通了但不入链（同厂且更弱）。
+
+**踩的坑**
+
+1. **Groq key 不是坏的，是被墙的。** 直连 403 Forbidden，走系统代理 200。curl 默认
+   不吃 macOS 系统代理，所以「key 无效」的判断是错的。
+2. **kilo 的 group 别名不能用。** 模型列表里 `kilo` 这个 id 解析到
+   `dots-3-note-preview:free`，且 `content` 返回 `None`。必须写全模型名。
+3. **Groq 8000 TPM 卡死 crawler。** 62k 字符（≈26.5k token）直接 413，而
+   `crawler.py:117` 每次就是 `html[:80000]`。加了 `max_input_tokens` 闸门，
+   tiktoken 估算后提前跳过，省掉三次 413。20k token 上闸门开销 6ms。
+
+**没走 9router 网关**：那个本地网关（`localhost:20128`）在 httpx 下会被系统代理
+劫持而连接失败，且多一跳。直连 + `.env` key 更简单。
+
+**未完成**：crawler 那条 20k token 的抽取请求，链序上本来就先被 agnes 接住，
+闸门只在 agnes/kilo/nemotron 全挂时才真正省时间——它是保险不是提速。
+
 ## 2026-10-09
 整体信息处理流程：
 先根据 boss_jobs.json先制定几个岗位簇，这个时候应该先不管用户 Persona。每个岗位簇确定好核心能力要求和定位。然后我们用这个岗位族的定义和要求来结合用户 Persona 来寻找 gap 制定简历，然后在每个岗位族下遍历 job 和简历制定面试策略，找出优势，弥补劣势，这时候就不去改简历了，而是通过策略性面试来增加获取工作的机会。这个框架和流程合理吗

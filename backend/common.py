@@ -169,12 +169,18 @@ def render_markdown(text: str) -> str:
 
 
 def clean_llm_json(raw: str) -> dict:
-    """去 markdown 代码块后解析 JSON。LLM 偶发包 ```json 块。"""
+    import re
     body = raw.strip()
     if body.startswith("```"):
-        body = body.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-        if body.startswith("json"):
-            body = body[4:].strip()
+        body = body.split("\n", 1)[1].rsplit("```", 1)[0].strip().removeprefix("json").strip()
+    for _ in range(2):
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError:
+            s, e = body.find("{"), body.rfind("}")
+            if s >= 0 and e > s:
+                body = body[s:e + 1]
+            body = re.sub(r",\s*([}\]])", r"\1", body)
     return json.loads(body)
 
 

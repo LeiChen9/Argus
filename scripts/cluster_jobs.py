@@ -163,8 +163,12 @@ def build_messages(job: dict, resume: str) -> list[dict]:
 
 
 def analyze_one(job: dict, resume: str) -> tuple[dict, str]:
-    """单岗位调一次 LLM（容灾在 call_llm 里），返回 (分析结果, 实际用的模型)。"""
-    msg = call_llm(build_messages(job, resume), temperature=0.1)
+    for _ in range(2):
+        msg = call_llm(build_messages(job, resume), temperature=0.1)
+        try:
+            return clean_llm_json(msg["content"]), msg["model"]
+        except Exception:
+            continue
     return clean_llm_json(msg["content"]), msg["model"]
 
 
@@ -175,21 +179,32 @@ def main() -> None:
 
     resume = build_resume_profile(persona)
     chain = [i["name"] for i in active_chain()]
+    existing = []
+    if OUT_JSON.exists():
+        try:
+            existing = json.loads(OUT_JSON.read_text(encoding="utf-8")).get("results", [])
+        except Exception:
+            existing = []
     payload = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M"),
         "model_chain": chain,
         "persona": persona,
         "total": len(jobs),
-        "results": [],
+        "results": existing,
     }
     print(f"岗位 {len(jobs)} 个 · 容灾链 {' → '.join(chain)}")
-
+    done = {r["job"]["id"] for r in payload["results"]}
+    todo = [j for j in jobs if j["id"] not in done]
+    print(f"已完成 {len(done)} 个，剩余 {len(todo)} 个")
     with OUT_JSON.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
-
-        for i, job in enumerate(jobs, 1):
+        for i, job in enumerate(todo, 1):
             t0 = time.perf_counter()
-            analysis, used = analyze_one(job, resume)
+            try:
+                analysis, used = analyze_one(job, resume)
+            except Exception as e:
+                print(f"  [{i}/{len(todo)}] {job['company']} · {job['title']} · failed: {e}", flush=True)
+                continue
             payload["results"].append(
                 {
                     "job": {

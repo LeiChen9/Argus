@@ -2,6 +2,7 @@ import { go } from "./nav.js";
 import { jobCards } from "./cards.js";
 import { resumeCard } from "./resume.js";
 
+const sid = (() => { let v = localStorage.getItem("argus_sid"); if (!v) { v = crypto.randomUUID(); localStorage.setItem("argus_sid", v); } return v; })();
 const msgs = document.getElementById("msgs");
 const form = document.getElementById("composer");
 const input = document.getElementById("input");
@@ -85,7 +86,7 @@ document.getElementById("chat-back").addEventListener("click", () => go("home"))
 // 留一句 Argus 的话，不然界面空得突兀。清空会一并退出简历模式，简历卡也收掉。
 document.getElementById("chat-clear").addEventListener("click", async () => {
   try {
-    await fetch("/api/chat/clear", { method: "POST" });
+    await fetch("/api/chat/clear", { method: "POST", headers: { "X-Session-Id": sid } });
   } catch (err) {
     show(row("them", `没清成功：${err.message}`));
     return;
@@ -131,7 +132,7 @@ form.addEventListener("submit", async (event) => {
   try {
     const res = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Session-Id": sid },
       body: JSON.stringify({ message }),
     });
     const data = await res.json();

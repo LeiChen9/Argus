@@ -95,6 +95,19 @@ document.getElementById("chat-clear").addEventListener("click", async () => {
   clearResume();
 });
 
+input.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.shiftKey) return;
+  event.preventDefault();
+  form.requestSubmit();
+});
+
+// 先 auto 再读 scrollHeight：不置 auto 只能越打越高，收不回来。
+const fit = () => {
+  input.style.height = "auto";
+  input.style.height = `${input.scrollHeight}px`;
+};
+input.addEventListener("input", fit);
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const picked = file.files[0];
@@ -128,6 +141,7 @@ form.addEventListener("submit", async (event) => {
   if (!message) return;
   show(row("me", message));
   input.value = "";
+  fit();
   const pending = showTyping();
   try {
     const res = await fetch("/api/chat", {

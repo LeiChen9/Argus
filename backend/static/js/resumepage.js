@@ -60,6 +60,7 @@ let currentId = "";
 let state = null;      // 最近一次从服务器拿到的简历。**只有提交成功才更新**——
 let editing = null;    //   取消时靠它把没提交的改动还原回去
 const ops = new Map(); // path -> op，同一字段反复改只留最后一次
+let view = null;       // state + 待提交 ops 的本地投影，页面只画它
 let chain = Promise.resolve();   // 串行：apply_patch 按下标算，两批并发会打错位置
 let seq = 0;           // add 的 path 恒为 `-`，得另给一个不撞的 key
 
@@ -93,7 +94,25 @@ const icon = (svg, label, onClick, cls = "redit__ib") => {
   return b;
 };
 
-const push = (op) => ops.set(`#${seq++}`, op);
+// 逐字复刻后端 utils.py 的 apply_patch：op 按序作用在同一份深拷贝上，
+// add 无视末段永远 append，set/remove 按下标。语义不一致的话页面会显示一个
+// 服务端根本不会存的结果。
+const applyLocal = (doc, op) => {
+  const tokens = op.path.split("/").filter(Boolean);
+  let node = doc;
+  for (const t of tokens.slice(0, -1)) node = Array.isArray(node) ? node[Number(t)] : node[t];
+  const last = tokens[tokens.length - 1];
+  const at = Array.isArray(node) ? Number(last) : last;
+  if (op.op === "add") node.push(op.value);
+  else if (op.op === "set") node[at] = op.value;
+  else node.splice(at, 1);
+};
+
+const push = (op) => {
+  ops.set(`#${seq++}`, op);
+  applyLocal(view, op);
+  paint();
+};
 
 const post = async (id, batch) => {
   const res = await fetch(`/api/resumes/${encodeURIComponent(id)}/edits`, {
@@ -119,13 +138,16 @@ const flush = () => {
   chain = chain.then(async () => {
     const doc = await post(id, batch);
     if (doc && id === currentId) state = doc;
+    // ops 在 POST 之前就清了。存上就接着新真相画，没存上就退回旧真相——
+    // 页面从此看到的和服务器上的永远是同一份。
+    view = structuredClone(state);
     return doc;
   });
   return chain;
 };
 
 const paint = () => {
-  if (state) render(state);
+  if (view) render(view);
 };
 
 const submit = async () => {
@@ -138,6 +160,7 @@ const submit = async () => {
 // 重画一遍就回去了。
 const cancel = () => {
   ops.clear();
+  view = structuredClone(state);
   editing = null;
   paint();
 };
@@ -160,10 +183,21 @@ const field = (path, value, cls, long = false) => {
   return node;
 };
 
+// 先 auto 再读 scrollHeight：不置 auto 只能越打越高，收不回来。
+const fit = (node) => {
+  node.style.height = "auto";
+  node.style.height = `${node.scrollHeight}px`;
+};
+
 const onInput = (e) => {
   const path = e.target?.dataset?.path;
   if (!path) return;
-  ops.set(path, { op: "set", path, value: e.target.value });
+  const op = { op: "set", path, value: e.target.value };
+  ops.set(path, op);
+  applyLocal(view, op);
+  if (e.target.classList.contains("redit__skill__in")) e.target.size = Math.max(4, vw(e.target.value) + 1);
+  // 不重绘：每敲一个字 paint 一次会把焦点和光标位置冲掉。
+  if (e.target.tagName === "TEXTAREA") fit(e.target);
 };
 
 const add = (label, op) => {
@@ -249,6 +283,10 @@ const experience = (w, wi) => {
   return box;
 };
 
+// input 的 size 是按「0」的宽度算的，中日韩字符约等于两个 0。不换算的话
+// 「数据建模」会被塞进 4 字符宽的框里，文字在里面横向滚动。
+const vw = (s) => [...s].reduce((n, c) => n + (c.charCodeAt(0) > 0x2e80 ? 2 : 1), 0);
+
 const skills = (list) => {
   const key = "skills";
   const box = el("section", "redit__sect");
@@ -260,7 +298,9 @@ const skills = (list) => {
   list.forEach((s, i) => {
     const chip = el("span", `redit__skill${editing === key ? "" : " is-plain"}`);
     if (editing === key) {
-      chip.append(el("i", null, s), icon(ICON_TRASH, `删掉 ${s}`,
+      const text = field(`/skills/${i}`, s, "redit__skill__in");
+      text.size = Math.max(4, vw(s) + 1);
+      chip.append(text, icon(ICON_TRASH, `删掉 ${s}`,
         () => push({ op: "remove", path: `/skills/${i}` }), "redit__ib is-trash is-mini"));
     } else {
       chip.append(el("i", null, s));
@@ -322,7 +362,6 @@ const education = (list) => {
 };
 
 const render = (doc) => {
-  state = doc;
   currentId = doc.career_id || currentId;
   document.getElementById("resume-htitle").textContent = doc.career_name ?? "简历";
   const kids = (doc.work_history ?? []).map(experience);
@@ -334,6 +373,8 @@ const render = (doc) => {
   kids.push(skills(doc.skills ?? []), education(doc.education ?? []), status);
   const host = document.getElementById("resume-body");
   host.replaceChildren(...kids);
+  // 节点 detached 时量 scrollHeight 得 0，只能插进去之后再 fit。
+  for (const node of host.querySelectorAll(".redit__area")) fit(node);
   host.oninput = onInput;
   say("");
 };
@@ -350,7 +391,9 @@ const show = async (id) => {
   if (!doc) return;
   shown = id;
   editing = null;
-  render(doc);
+  state = doc;
+  view = structuredClone(doc);
+  render(view);
   go("resumedit");
 };
 

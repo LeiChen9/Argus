@@ -144,7 +144,7 @@ const readStream = async (res, pending) => {
       const ev = frame.match(/^event: (.+)$/m)?.[1];
       if (!ev) continue;
       const data = JSON.parse(frame.match(/^data: (.*)$/m)?.[1] ?? "{}");
-      if (ev === "error") throw new Error(data.detail);
+      if (ev === "error") { const e = new Error(data.detail); e.fromServer = true; throw e; }
       if (ev === "content") {
         if (!bubble) { pending?.remove(); bubble = document.createElement("p"); bubble.className = "bubble"; show(row("them", null, bubble)); }
         raw += data.content;
@@ -207,8 +207,9 @@ form.addEventListener("submit", async (event) => {
     if (data.jobs?.length) show(row("them", null, jobCards(data.jobs)));
     if (data.resume) showResume(data.resume);
   } catch (err) {
-    // 捞不回来才报原始错误，别把真错误盖掉。
-    if (!(await recoverReply(message))) show(row("them", `我说不了话：${err.message}`));
+    // 后端明确报错（如所有模型不可用）时它根本没存盘，轮询 2 分钟纯属白等，直接显示。
+    // 只有连接被掐（无 error 事件）才去捞，捞不回来才报原始错误，别把真错误盖掉。
+    if (err.fromServer || !(await recoverReply(message))) show(row("them", `我说不了话：${err.message}`));
   } finally {
     pending.remove();
   }

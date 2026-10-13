@@ -1,5 +1,9 @@
 #!/bin/sh
 set -e
+# 清掉父进程继承来的代理：本脚本以 sh 运行，不读 zsh 配置，手工 source .zshrc 或写
+# ~/.zshenv 都拦不住。残留的 socks:// 会让 httpx 报 Unknown scheme，整条模型链全灭。
+# 只有在这里 unset 才能保证 uvicorn 拿到干净环境——watchdog 也是走这个脚本。
+unset ALL_PROXY all_proxy
 ROOT=/Users/riceball/Documents/Projs/Argus
 PY=/Users/riceball/miniconda3/envs/echo/bin
 PROXY=$ROOT/worker-proxy

@@ -114,7 +114,7 @@ def fetch_liepin_html(keyword: str) -> str:
 
 def parse_jobs(html: str) -> list[dict]:
     prompt = "分析以下猎聘 HTML，提取职位列表，字段固定为 title/company/salary/link。只输出 JSON 数组。"
-    msg = call_llm([{"role": "user", "content": f"{prompt}\n\n{html[:80000]}"}], temperature=0.1)
+    msg = call_llm([{"role": "user", "content": f"{prompt}\n\n{html[:80000]}"}], temperature=0.1, max_tokens=8192)
     jobs = clean_llm_json(msg["content"] or "[]")
     out = []
     for j in jobs:

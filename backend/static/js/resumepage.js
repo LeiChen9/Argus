@@ -94,6 +94,16 @@ const icon = (svg, label, onClick, cls = "redit__ib") => {
   return b;
 };
 
+// 上下移。靠边就 disabled 而不是不渲染——按钮凭空消失会让整排往左抽一下。
+const mover = (path, i, n) => {
+  const mk = (arrow, to, label) => {
+    const b = icon(arrow, label, () => push({ op: "move", path: `${path}/${i}`, to }), "redit__ib is-move");
+    b.disabled = to < 0 || to >= n;
+    return b;
+  };
+  return [mk("↑", i - 1, "往上挪一个"), mk("↓", i + 1, "往下挪一个")];
+};
+
 // 逐字复刻后端 utils.py 的 apply_patch：op 按序作用在同一份深拷贝上，
 // add 无视末段永远 append，set/remove 按下标。语义不一致的话页面会显示一个
 // 服务端根本不会存的结果。
@@ -105,6 +115,7 @@ const applyLocal = (doc, op) => {
   const at = Array.isArray(node) ? Number(last) : last;
   if (op.op === "add") node.push(op.value);
   else if (op.op === "set") node[at] = op.value;
+  else if (op.op === "move") { const [n] = node.splice(at, 1); node.splice(op.to, 0, n); }
   else node.splice(at, 1);
 };
 
@@ -247,14 +258,19 @@ const bar = (key) => {
   return box;
 };
 
-const project = (p, wi, pi) => {
+const project = (p, wi, pi, pn) => {
   const box = el("div", "redit__proj");
-  box.append(
-    field(`/work_history/${wi}/projects/${pi}/name`, p.name, "redit__name"),
-    field(`/work_history/${wi}/projects/${pi}/description`, p.description, "redit__area", true),
+  const tools = el("div", "redit__ibrow");
+  tools.append(
+    ...mover(`/work_history/${wi}/projects`, pi, pn),
     icon(ICON_TRASH, "删掉这个项目",
       () => push({ op: "remove", path: `/work_history/${wi}/projects/${pi}` }),
       "redit__ib is-trash"),
+  );
+  box.append(
+    field(`/work_history/${wi}/projects/${pi}/name`, p.name, "redit__name"),
+    field(`/work_history/${wi}/projects/${pi}/description`, p.description, "redit__area", true),
+    tools,
   );
   return box;
 };
@@ -273,7 +289,8 @@ const experience = (w, wi) => {
     field(`/work_history/${wi}/start_date`, w.start_date, "redit__date"),
     field(`/work_history/${wi}/end_date`, w.end_date, "redit__date"),
   );
-  (w.projects ?? []).forEach((p, pi) => box.append(project(p, wi, pi)));
+  const projs = w.projects ?? [];
+  projs.forEach((p, pi) => box.append(project(p, wi, pi, projs.length)));
   box.append(add("＋ 项目", {
     op: "add",
     path: `/work_history/${wi}/projects/-`,
@@ -300,7 +317,7 @@ const skills = (list) => {
     if (editing === key) {
       const text = field(`/skills/${i}`, s, "redit__skill__in");
       text.size = Math.max(4, vw(s) + 1);
-      chip.append(text, icon(ICON_TRASH, `删掉 ${s}`,
+      chip.append(text, ...mover("/skills", i, list.length), icon(ICON_TRASH, `删掉 ${s}`,
         () => push({ op: "remove", path: `/skills/${i}` }), "redit__ib is-trash is-mini"));
     } else {
       chip.append(el("i", null, s));

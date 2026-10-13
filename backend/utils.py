@@ -41,7 +41,8 @@ def apply_patch(doc: dict, ops: list) -> tuple[dict, list[str]]:
     """按 ops 改 doc，返回 (新文档, 改了哪些 path)。任何一条落不了地就抛，doc 原封不动。
 
     path 是 JSON Pointer（RFC 6901），按文档结构走：列表段写下标，对象段写键名。
-    `set` 改字段、`add` 往列表末尾追加（末段写 `-`）、`remove` 删掉。
+    `set` 改字段、`add` 往列表末尾追加（末段写 `-`）、`remove` 删掉、
+    `move` 把末段下标那一项挪到 `to`（相邻两项对调就是 to = 末段 ± 1）。
 
       {"op": "set",    "path": "/work_history/0/projects/0/description", "value": "…"}
       {"op": "add",    "path": "/skills/-", "value": "SQL"}
@@ -64,6 +65,8 @@ def apply_patch(doc: dict, ops: list) -> tuple[dict, list[str]]:
                 node.append(op["value"])
             elif kind == "set":
                 node[int(last) if isinstance(node, list) else last] = op["value"]
+            elif kind == "move":
+                node.insert(int(op["to"]), node.pop(int(last)))
             else:
                 node.pop(int(last) if isinstance(node, list) else last)
         except Exception as e:

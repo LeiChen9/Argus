@@ -657,11 +657,11 @@ button { font: inherit; color: inherit; }
 .redit__role { font-size: 13.5px; color: var(--ink-2); }
 .redit__date { display: inline-block; width: 7.2em; font-size: 12.5px; color: var(--ink-3); }
 .redit__proj { position: relative; margin: 10px 0 0; padding: 8px 0 0; border-top: 0.5px solid var(--hairline); }
-.redit__name { font-size: 13.5px; font-weight: 600; padding-right: 34px; }
+.redit__name { font-size: 13.5px; font-weight: 600; padding-right: 80px; }
 .redit__area { min-height: 4.6em; max-height: 40vh; overflow-y: auto; font-size: 13px; line-height: 1.65; resize: vertical; }
-/* 垃圾桶图标压在项目块右上角。要绝对定位：早先用 float + 负 margin，按钮被下面的
+/* 按钮组压在项目块右上角。要绝对定位：早先用 float + 负 margin，按钮被下面的
    textarea 盖住、点击全被吃掉，每个项目的「删」都是死的。 */
-.redit__proj > .redit__ib { position: absolute; top: 5px; right: 0; }
+.redit__ibrow { position: absolute; top: 5px; right: 0; display: flex; gap: 2px; }
 
 .redit__add {
   margin-top: 10px;
@@ -719,6 +719,8 @@ button { font: inherit; color: inherit; }
 .redit__ib.is-trash { color: #b4442f; }
 .redit__ib.is-trash.is-mini { width: 22px; height: 22px; }
 .redit__ib.is-trash.is-mini svg { width: 14px; height: 14px; }
+.redit__ib.is-move { font-size: 14px; line-height: 1; }
+.redit__ib:disabled { opacity: .3; cursor: default; }
 
 /* 删掉整段经历：按钮带图标 + 文字，跟上面「垃圾桶」图标区分开——这个一按就没了
    几年经历，所以要二次确认（逻辑在 resume.js 的 drop()）。 */

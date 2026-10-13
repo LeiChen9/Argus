@@ -10,6 +10,9 @@
   "loggers": {
     "uvicorn": { "handlers": ["default"], "level": "INFO", "propagate": false },
     "argus.persona": { "handlers": ["default"], "level": "INFO", "propagate": false },
+    "argus.chat": { "handlers": ["default"], "level": "INFO", "propagate": false },
+    "argus.llm": { "handlers": ["default"], "level": "INFO", "propagate": false },
+    "argus.tools": { "handlers": ["default"], "level": "INFO", "propagate": false },
     "uvicorn.error": { "handlers": ["default"], "level": "INFO", "propagate": false }
   }
 }

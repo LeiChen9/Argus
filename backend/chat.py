@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from common import project_root, render_markdown, call_llm
+from common import project_root, render_markdown, call_llm, call_llm_stream
 from utils import load_file
 from tools import (
     auto_compact, read_persona, read_careers, read_gaps_index, read_gap, search_jobs,
@@ -253,14 +256,10 @@ def _execute_tool(sid: str, name: str, args: dict) -> tuple[dict, list[dict] | N
 def _run_agent(sid: str, messages: list[dict]) -> tuple[dict, list[dict] | None]:
     cards = None
     for _ in range(MAX_TOOL_STEPS):
-        msg = call_llm(messages, tools=TOOLS)
+        msg = call_llm(messages, tools=TOOLS, max_tokens=8192)
         if not msg["tool_calls"]:
             return msg, cards
-        messages.append({
-            "role": "assistant",
-            "content": msg["content"],
-            "tool_calls": [t.model_dump(exclude_none=True) for t in msg["tool_calls"]],
-        })
+        messages.append({"role": "assistant", "content": msg["content"], "tool_calls": [t.model_dump(exclude_none=True) for t in msg["tool_calls"]]})
         for t in msg["tool_calls"]:
             result, found = _execute_tool(sid, t.function.name, json.loads(t.function.arguments))
             cards = found or cards
@@ -268,21 +267,33 @@ def _run_agent(sid: str, messages: list[dict]) -> tuple[dict, list[dict] | None]
     return msg, cards
 
 
-@router.post("/api/chat")
-def chat(body: ChatRequest, request: Request) -> dict:
-    message = body.message.strip()
-    if not message:
-        raise HTTPException(status_code=400, detail="消息为空")
-    sid = _sid(request)
+def _run_agent_stream(sid: str, messages: list[dict], on_delta) -> tuple[dict, list[dict] | None]:
+    cards = None
+    for _ in range(MAX_TOOL_STEPS):
+        msg = call_llm_stream(messages, on_delta, tools=TOOLS, max_tokens=8192)
+        if not msg["tool_calls"]: return msg, cards
+        tc = [{"id": t.id, "type": "function", "function": {"name": t.function.name, "arguments": t.function.arguments}} for t in msg["tool_calls"]]
+        messages.append({"role": "assistant", "content": msg["content"], "tool_calls": tc})
+        for t in msg["tool_calls"]:
+            r, f = _execute_tool(sid, t.function.name, json.loads(t.function.arguments or "{}"))
+            cards = f or cards
+            messages.append({"role": "tool", "tool_call_id": t.id, "content": json.dumps(r, ensure_ascii=False)})
+    return msg, cards
+
+
+def _messages(sid: str, message: str) -> list[dict]:
+    """一轮对话要发给模型的消息。流式和非流式共用。"""
     sess = _load_session(sid)
-    try:
-        msg, cards = _run_agent(sid, [
-            {"role": "system", "content": _system_prompt(sid)},
-            *auto_compact(sess["history"]),
-            {"role": "user", "content": message},
-        ])
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    return [
+        {"role": "system", "content": _system_prompt(sid)},
+        *auto_compact(sess["history"]),
+        {"role": "user", "content": message},
+    ]
+
+
+def _finish(sid: str, message: str, msg: dict, cards: list | None) -> dict:
+    """把这一轮落进会话并拼出响应。落盘在拼响应之前，响应丢了也还能捞回来。"""
+    sess = _load_session(sid)
     reply = msg["content"] or ""
     sess["history"].append({"role": "user", "content": message})
     sess["history"].append({"role": "assistant", "content": reply})
@@ -294,6 +305,63 @@ def chat(body: ChatRequest, request: Request) -> dict:
     if card:
         resp["resume"] = card
     return resp
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+# 心跳是这个端点存在的理由：agent loop 在线程里跑，主线程每 5 秒吐一个 SSE 注释行。
+# 
+# 跑一轮要 30-90 秒，这期间一个字节都不发的话，流量网络上的运营商 NAT 会把这条
+# 连接当空闲掐掉，Safari 报 Load failed，而后端早把答案算完存盘了（真发生过）。
+# 注释行在 SSE 里合法、客户端会忽略，正是用来保活的。心跳不携带任何内容。
+@router.post("/api/chat/stream")
+def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="消息为空")
+    sid = _sid(request)
+    messages = _messages(sid, message)
+    out: queue.Queue = queue.Queue()
+
+    def work():
+        def on_delta(t): out.put(("content", {"content": t}))
+        try:
+            out.put(("reply", _finish(sid, message, *_run_agent_stream(sid, messages, on_delta))))
+        except Exception as e:
+            out.put(("error", {"detail": str(e)}))
+
+    threading.Thread(target=work, daemon=True).start()
+
+    def gen():
+        while True:
+            try:
+                kind, payload = out.get(timeout=5)
+            except queue.Empty:
+                yield ": keepalive\n\n"
+                continue
+            yield _sse(kind, payload)
+            if kind in ("reply", "error"): return
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/api/chat")
+def chat(body: ChatRequest, request: Request) -> dict:
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="消息为空")
+    sid = _sid(request)
+    try:
+        msg, cards = _run_agent(sid, _messages(sid, message))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return _finish(sid, message, msg, cards)
 
 
 def _resume_card(sid: str) -> dict | None:
@@ -313,6 +381,20 @@ def chat_clear(request: Request) -> dict:
     return {"cleared": n, "resume_career": mode}
 
 
+@router.get("/api/chat/history")
+def chat_history(request: Request) -> dict:
+    """最后一轮对话，用来在请求被掐断后把已经算完的答案取回来。
+
+    请求失败不代表这一轮没跑完——切走 App、运营商断流都是客户端单方面取消，
+    后端照跑完并存了盘（_save_session 在拼响应之前）。此时界面只能显示一句
+    Load failed，答案却躺在会话文件里。返回渲染好的 HTML，前端直接插。
+    """
+    h = _load_session(_sid(request))["history"]
+    if len(h) < 2:
+        return {"turn": None}
+    return {"turn": {"user": h[-2]["content"], "reply": render_markdown(h[-1]["content"])}}
+
+
 @router.get("/api/resumes")
 def list_all_resumes() -> dict:
     return {"resumes": ensure_all()}
@@ -327,9 +409,10 @@ def get_resume(career_id: str) -> dict:
 
 
 class PatchOp(BaseModel):
-    op: Literal["set", "add", "remove"]
+    op: Literal["set", "add", "remove", "move"]
     path: str = Field(description="JSON Pointer：列表段写下标、对象段写键名，如 /work_history/0/projects/1/description")
     value: Any = None
+    to: int | None = Field(default=None, description="move 的目标下标")
 
 
 class ResumeEditRequest(BaseModel):

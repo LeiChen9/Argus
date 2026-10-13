@@ -108,6 +108,58 @@ const fit = () => {
 };
 input.addEventListener("input", fit);
 
+// 请求被掐掉（切走 App、运营商断流）时，后端那一轮往往已经算完存盘了，丢的只是
+// 送达。先把刚算完的那轮取回来，用户看到的还是答案而不是一句 Load failed。
+// 要 user 原文对得上才认，否则捞到的是上一轮，宁可不显示。
+// 重试窗口按最坏情况给足：实测跑满一轮要 90 秒以上，窗口短了等于没捞。
+const recoverReply = async (sent) => {
+  for (let i = 0; i < 60; i++) {
+    try {
+      const res = await fetch("/api/chat/history", { headers: { "X-Session-Id": sid } });
+      const t = (await res.json()).turn;
+      if (t && t.user === sent && t.reply) { showReply(t.reply); return true; }
+    } catch {}
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  return false;
+};
+
+// 流式读 SSE。fetch 没有 EventSource 的便利（它只支持 GET），这里手工切帧。
+// 帧之间用空行分隔；以 : 开头的是心跳注释行，直接跳过。
+// 遇到 content: 事件即刻渲染到页面，遇到 reply: 事件即渲染为最终版并清掉内容块。
+const readStream = async (res, pending) => {
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let bubble = null;
+  let raw = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let cut;
+    while ((cut = buf.indexOf("\n\n")) >= 0) {
+      const frame = buf.slice(0, cut);
+      buf = buf.slice(cut + 2);
+      const ev = frame.match(/^event: (.+)$/m)?.[1];
+      if (!ev) continue;
+      const data = JSON.parse(frame.match(/^data: (.*)$/m)?.[1] ?? "{}");
+      if (ev === "error") throw new Error(data.detail);
+      if (ev === "content") {
+        if (!bubble) { pending?.remove(); bubble = document.createElement("p"); bubble.className = "bubble"; show(row("them", null, bubble)); }
+        raw += data.content;
+        bubble.textContent = raw;
+        msgs.scrollTop = msgs.scrollHeight;
+      } else if (ev === "reply") {
+        if (bubble) { const md = document.createElement("div"); md.className = "bubble md"; md.innerHTML = data.reply; bubble.replaceWith(md); }
+        else { pending?.remove(); showReply(data.reply); }
+        return data;
+      }
+    }
+  }
+  return null;
+};
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const picked = file.files[0];
@@ -144,21 +196,19 @@ form.addEventListener("submit", async (event) => {
   fit();
   const pending = showTyping();
   try {
-    const res = await fetch("/api/chat", {
+    const res = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Session-Id": sid },
       body: JSON.stringify({ message }),
     });
-    const data = await res.json();
-    if (!res.ok) {
-      show(row("them", `我说不了话：${data.detail || res.status}`));
-      return;
-    }
-    showReply(data.reply);
+    if (!res.ok) throw new Error((await res.json()).detail || res.status);
+    const data = await readStream(res, pending);
+    if (!data) throw new Error("连接中断");
     if (data.jobs?.length) show(row("them", null, jobCards(data.jobs)));
     if (data.resume) showResume(data.resume);
   } catch (err) {
-    show(row("them", `我说不了话：${err.message}`));
+    // 捞不回来才报原始错误，别把真错误盖掉。
+    if (!(await recoverReply(message))) show(row("them", `我说不了话：${err.message}`));
   } finally {
     pending.remove();
   }

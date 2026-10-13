@@ -139,6 +139,7 @@ def analyze_jd(jd: str) -> dict:
         [{"role": "user", "content": ANALYZE_JD_PROMPT},
          {"role": "user", "content": material}],
         temperature=0.1,
+        max_tokens=8192,
     )
     return {"status": "ok", **clean_llm_json(msg["content"])}
 
@@ -290,7 +291,7 @@ def _compact(history: list[dict]) -> None:
         msg = call_llm([
             {"role": "user", "content": COMPACT_PROMPT},
             {"role": "user", "content": f"<对话记录>\n{transcript}\n</对话记录>"},
-        ])
+        ], max_tokens=8192)
         summary = (msg["content"] or "").strip()
     except RuntimeError as e:
         logger.warning("compact 失败，保留原历史：%s", e)

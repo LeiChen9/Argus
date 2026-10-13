@@ -185,18 +185,18 @@ def clean_llm_json(raw: str) -> dict:
 
 
 def ask_json(prompt: str, blocks: list[str], temperature: float = 0.7,
-             model: str | None = None) -> dict:
+             model: str | None = None, max_tokens: int | None = None) -> dict:
     """一次 LLM 调用要回 JSON。blocks 是跟在 prompt 后面的几段材料，各自一个 user 消息。
 
     model 非空时把它提到容灾链首（见 call_llm 的 pinned）。
     """
     messages = [{"role": "user", "content": prompt},
                 *({"role": "user", "content": b} for b in blocks)]
-    return clean_llm_json(call_llm(messages, temperature=temperature, pinned=model)["content"])
+    return clean_llm_json(call_llm(messages, temperature=temperature, pinned=model, max_tokens=max_tokens)["content"])
 
 
 def call_llm(messages: list[dict], *, tools: list[dict] | None = None, temperature: float = 0.7,
-              pinned: str | None = None) -> dict:
+              pinned: str | None = None, max_tokens: int | None = None) -> dict:
     """统一 LLM 调用，按 active_chain 顺序故障转移。返回 message 内容与实际使用的模型名。
 
     pinned 把指定模型提到链首，**只影响第一次尝试**：它失败仍照常降级到链上其余模型。
@@ -221,6 +221,8 @@ def call_llm(messages: list[dict], *, tools: list[dict] | None = None, temperatu
             kwargs = {"model": model_name, "messages": messages, "temperature": temperature}
             if tools:
                 kwargs["tools"] = tools
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
             resp = client.chat.completions.create(**kwargs)
             logger.info(f"使用模型: {model_name}")
             msg = resp.choices[0].message
@@ -229,3 +231,38 @@ def call_llm(messages: list[dict], *, tools: list[dict] | None = None, temperatu
             last_err = e
             logger.warning(f"模型 {model_name} 失败: {e}")
     raise RuntimeError(f"所有模型均不可用: {last_err}")
+
+
+def call_llm_stream(messages: list[dict], on_delta, *, tools: list[dict] | None = None, temperature: float = 0.7, pinned: str | None = None, max_tokens: int | None = None) -> dict:
+    import logging
+    logger = logging.getLogger("argus.llm")
+    chain = active_chain()
+    if pinned: chain = sorted(chain, key=lambda i: i["name"] != pinned)
+    last = None; toks = _input_tokens(messages, tools)
+    for it in chain:
+        m = it["name"]; lim = it.get("max_input_tokens")
+        if lim and toks > lim: continue
+        try:
+            kw = {"model": m, "messages": messages, "temperature": temperature, "stream": True}
+            if tools: kw["tools"] = tools
+            if max_tokens: kw["max_tokens"] = max_tokens
+            s = it["client"]().chat.completions.create(**kw)
+            txt = ""; tcs: dict[int, dict] = {}
+            for ch in s:
+                d = ch.choices[0].delta
+                if d.content: txt += d.content; on_delta(d.content)
+                if d.tool_calls:
+                    for tc in d.tool_calls:
+                        o = tcs.setdefault(tc.index, {"id": "", "function": {"name": "", "arguments": ""}})
+                        if tc.id: o["id"] = tc.id
+                        if tc.function:
+                            if tc.function.name: o["function"]["name"] += tc.function.name
+                            if tc.function.arguments: o["function"]["arguments"] += tc.function.arguments
+            if tcs:
+                from types import SimpleNamespace as NS
+                calls = [NS(id=v["id"], function=NS(name=v["function"]["name"], arguments=v["function"]["arguments"])) for v in tcs.values()]
+            else: calls = None
+            return {"content": txt, "tool_calls": calls, "model": m}
+        except Exception as e:
+            last = e; logger.warning(f"{m} 流式失败: {e}")
+    raise RuntimeError(f"所有模型均不可用: {last}")

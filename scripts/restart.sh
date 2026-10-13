@@ -4,10 +4,10 @@ ROOT=/Users/riceball/Documents/Projs/Argus
 PY=/Users/riceball/miniconda3/envs/echo/bin
 PROXY=$ROOT/worker-proxy
 
-if ! lsof -i :7800 >/dev/null 2>&1; then
-  nohup $PY/uvicorn main:app --app-dir $ROOT/backend --port 7800 --log-config $ROOT/uvicorn_config.json >/tmp/uvicorn_7800.log 2>&1 &
-  sleep 2
-fi
+pkill -f "uvicorn main:app" 2>/dev/null || true
+for i in 1 2 3 4 5; do ! lsof -i :7800 >/dev/null 2>&1 && break; sleep 1; done
+nohup $PY/uvicorn main:app --app-dir $ROOT/backend --port 7800 --log-config $ROOT/uvicorn_config.json >/tmp/uvicorn_7800.log 2>&1 &
+sleep 2
 
 # 拿一个**真能通**的 quick tunnel 地址。重试 3 轮，因为申请 quick tunnel 会间歇性
 # 超时（手工 POST 同样的请求每次都成功、耗时 4-5s，延迟偏高，cloudflared 偶尔错过

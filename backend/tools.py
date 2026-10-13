@@ -25,6 +25,7 @@ from jobs import gaps_by_job, normalize, save_snapshot, CAREERS, GAPS
 from resume import (
     CAREERS,
     RESUME_DIR,
+    body as resume_body,
     copy_from_persona,
     critique,
 )
@@ -94,15 +95,15 @@ def read_gap(job_id: str) -> dict:
 
 
 # ── JD 匹配 ───────────────────────────────────────────────────────────────
-# 用户在 chat 里贴一份 JD，比对 persona 判断是否合适，并给招聘平台开场白。
+# 用户在 chat 里贴一份 JD，从 data/resumes 现有简历里挑最合适的一份，并给招聘平台开场白。
 # prompt 抄自 scripts/cluster_jobs.py 的 ANALYZE_PROMPT（openning 逐字保留），
-# 那边是批量岗位全量报告，这里只要判断 + 开场白，故裁到这两个字段。
+# 那边是批量岗位全量报告，这里只要选简历 + 开场白，故裁到这几个字段。
 
 JD_MAX_CHARS = 1600
 
 ANALYZE_JD_PROMPT = """
 <Role>
-你是深度求职匹配与策略分析专家。对候选人 Persona 与用户贴来的一份岗位 JD 做精细化能力比对，判断是否合适，并给出打招呼开场白。
+你是深度求职匹配与策略分析专家。对候选人现有多份简历与用户贴来的一份岗位 JD 做精细化能力比对，挑出最合适的一份，并给出打招呼开场白。
 </Role>
 
 <Principles>
@@ -110,14 +111,14 @@ ANALYZE_JD_PROMPT = """
 2. 以终为始：先推理该岗位真正需要什么能力，再与 Persona 逐项比对。
 3. 证据客观锚定：只依据 Persona 真实经历，迁移性能力须标注迁移路径，不得假想未列出的能力。
 4. 意向与能力隔离：地点、薪资等仅作硬性标记。
+5. 展现长处隐藏短板：在开场白中只说自己与岗位契合且面试官偏好的核心能力，充分展示自己竞争力，不要提及短板或不相关经历。表达要专业、连贯。
 </Principles>
 
 <Output_Constraint>
 必须且仅输出合法 JSON 字符串，不得含 Markdown 代码块标记或任何前言后记。结构：
 {
-  "cluster_category": "apply_now | learn_then_apply | build_evidence_then_apply | develop_then_apply | deprioritize",
-  "confidence": "high | medium | low",
-  "matching_rationale": "string (总体匹配度与分类依据的完整逻辑阐述)",
+  "best_resume": "string (最合适的那份简历对应的职能名；一份都不合适就填空字符串)",
+  "rationale": "string (为什么这份简历最合适，或为什么都不合适)",
   "openning": "string (在招聘平台上对对方打招呼的开场白，以“你好，我有多年互联网商业数据分析经验，擅长指标量化归因与精细化运营策略，对贵岗很感兴趣，期待与您沟通“为 base，根据岗位核心需求和自身优势进行个性化改写，字数控制在 50 字左右，表达专业，平视对方，避免热切，避免套话)"
 }
 </Output_Constraint>
@@ -126,15 +127,19 @@ ANALYZE_JD_PROMPT = """
 
 @tool
 def analyze_jd(jd: str) -> dict:
-    """用户贴一份 JD 时调它：判断与用户 Persona 是否匹配，并给一段招聘平台开场白。"""
+    """用户贴一份 JD 时调它：从 data/resumes 现有简历里挑最合适的一份，并给一段招聘平台开场白。"""
     jd = (jd or "").strip()
     if not jd:
         return {"status": "error", "detail": "JD 为空"}
-    persona = json.dumps(get_persona(), ensure_ascii=False, indent=2)
-    material = (
-        f"<Candidate_Persona>\n{persona}\n</Candidate_Persona>\n\n"
-        f"<Target_JD>\n{jd[:JD_MAX_CHARS]}\n</Target_JD>"
-    )
+    docs = [d for p in sorted(RESUME_DIR.glob("*.json")) if (d := load_file(p))] if RESUME_DIR.exists() else []
+    if docs:
+        material = "\n\n".join(
+            f'<简历 career="{d.get("career_name", d.get("career_id", ""))}">\n{resume_body(d)}\n</简历>'
+            for d in docs)
+    else:
+        # 一份简历都没建过时退回 persona 初稿，至少还能判断。
+        material = f"<Candidate_Persona>\n{json.dumps(get_persona(), ensure_ascii=False, indent=2)}\n</Candidate_Persona>"
+    material += f"\n\n<Target_JD>\n{jd[:JD_MAX_CHARS]}\n</Target_JD>"
     msg = call_llm(
         [{"role": "user", "content": ANALYZE_JD_PROMPT},
          {"role": "user", "content": material}],

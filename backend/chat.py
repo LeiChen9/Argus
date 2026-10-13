@@ -27,6 +27,7 @@ from resume import (
     body as resume_body,
     document,
     ensure_all,
+    list_resumes,
 )
 
 logger = logging.getLogger("argus.chat")
@@ -36,17 +37,16 @@ router = APIRouter()
 SYSTEM_PROMPT = """你是 Argus，一个职业发展助手。
 
 你的目标是充分了解用户，为他/她找到心仪合适的工作。
-通过持续对话理解用户经历，用户求职的目标，期望薪资范围，以及期望工作城市。
+通过持续对话理解用户的画像和求职意向，帮他/她准备简历、分析岗位 JD、判断岗位匹配度、找出岗位适合投递的简历，提供打招呼开场白等求职策略。
 
-你对用户的了解全部存在四个只读文件里，需要时自己判断读哪个，不要预读、也不要一次读全：
-read_persona（**他最初上传的那份**履历与求职意向）、read_careers（岗位侧要什么能力）、
-read_job_gaps（哪些岗位已有差距解读）、read_job_gap（某个岗位差在哪）。
-先用 read_persona 确认用户底细，再用 read_careers 看岗位要求，最后才用 read_job_gap 核对具体岗位。
+你的材料都在只读文件里，需要哪份读哪份，不要预读、不要一次读全。
+读哪个由当前问题决定：read_careers 读 careers.json，岗位侧要什么能力；
+read_resume(career_id) 读 data/resumes 下他自己改过的那份简历。没有的别硬读。
 
 读完直接回答用户关心的事，不要罗列你读了哪些文件、也不要复述文件里的原始结构。
 每次只输出一两句话。不要长篇大论。
 
-用户**贴来一份岗位 JD**时，调 analyze_jd 判断是否合适，并把开场白一并给他。
+用户**贴来一份岗位 JD**时，调 analyze_jd 从现有简历里挑出最合适的，并把开场白一并给他。
 
 **简历**：用户想为某个职能准备简历时（不管是他说「我想投经营分析」还是「帮我改改简历」），
 你自己判断该针对哪个职能，调 start_resume 开始跟他聊——不要问用户要点哪个按钮。
@@ -109,16 +109,19 @@ def _current_resume(sid: str) -> dict | None:
 
 def _system_prompt(sid: str) -> str:
     saved = _current_resume(sid)
-    if not saved:
-        return SYSTEM_PROMPT
-    stamp = f"最后由用户自己修改于 {saved.get('updated_at', '未知时间')}"
-    return "\n\n".join([
-        SYSTEM_PROMPT,
-        DIRECTIVE.format(career=saved["career_name"]),
-        f"## 当前简历（{saved['career_name']}，{stamp}）\n\n{resume_body(saved)}\n\n"
-        "上面是磁盘上的当前版本，**他随时可能刚在 Resume 页改过**。你在这段对话里读到的、"
-        "自己记下的任何简历内容一律作废，以这一份为准。",
-    ])
+    turns = [SYSTEM_PROMPT]
+    resumes = list_resumes()
+    if resumes:
+        lines = "\n".join(f"- {r['career_id']}｜{r['career_name']}｜改于 {r['updated_at']}" for r in resumes)
+        turns.append(f"## 他现有的简历（data/resumes）\n\n{lines}")
+    if saved:
+        stamp = f"最后由用户自己修改于 {saved.get('updated_at', '未知时间')}"
+        turns.append(DIRECTIVE.format(career=saved["career_name"]))
+        turns.append(
+            f"## 当前简历（{saved['career_name']}，{stamp}）\n\n{resume_body(saved)}\n\n"
+            "上面是磁盘上的当前版本，**他随时可能刚在 Resume 页改过**。你在这段对话里读到的、"
+            "自己记下的任何简历内容一律作废，以这一份为准。")
+    return "\n\n".join(turns)
 
 
 class ChatRequest(BaseModel):
@@ -172,7 +175,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "analyze_jd",
-            "description": "用户贴来一份岗位 JD 时调它：对比他的 Persona 判断这个岗位是否合适，并给出一段招聘平台上打招呼的开场白。JD 原文从用户消息里取，原样传入，不要自己编。",
+            "description": "用户贴来一份岗位 JD 时调它：从 data/resumes 现有简历里挑出最合适的一份，并给出一段招聘平台上打招呼的开场白。JD 原文从用户消息里取，原样传入，不要自己编。",
             "parameters": {
                 "type": "object",
                 "properties": {"jd": {"type": "string", "description": "用户贴来的岗位 JD 原文"}},

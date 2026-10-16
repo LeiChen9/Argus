@@ -5,6 +5,7 @@
 import { go, back as navBack } from "./nav.js";
 import { aiSection } from "./analysis.js";
 import { deRadical, el } from "./dom.js";
+import { api } from "./api.js";
 
 export const SOURCE = { boss_recommend: "BOSS直聘·为你推荐", liepin: "猎聘" };
 
@@ -22,7 +23,7 @@ const idFromHash = () => {
 
 const find = async (id) => {
   if (remembered.has(id)) return remembered.get(id);
-  store ??= fetch("/api/jobs")
+  store ??= api("/api/jobs")
     .then((r) => r.json())
     .then((d) => {
       (d.jobs ?? []).forEach(remember);
@@ -107,7 +108,7 @@ const show = async (id) => {
   go("job");
 
   // 解读是懒加载的，返回时可能已经切到别的岗位或离开了详情页，丢弃即可。
-  const doc = await fetch(`/api/jobs/${encodeURIComponent(id)}/analysis`)
+  const doc = await api(`/api/jobs/${encodeURIComponent(id)}/analysis`)
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null);
   if (!doc || shown !== id || !slot.isConnected) return;

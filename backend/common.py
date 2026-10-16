@@ -350,8 +350,10 @@ async def _fetch_create(item, messages, tools, temperature, max_tokens, on_delta
     if resp.status != 200:
         raise RuntimeError(f"{item['name']} HTTP {resp.status}: {(await resp.text())[:200]}")
     if not stream:
-        msg = (await resp.json())["choices"][0]["message"]
-        return {"content": msg.get("content"), "tool_calls": msg.get("tool_calls")}
+        body_json = await resp.json()
+        msg = body_json["choices"][0]["message"]
+        return {"content": msg.get("content"), "tool_calls": msg.get("tool_calls"),
+                "usage": body_json.get("usage")}
     reader = resp.body.getReader()
     decoder = js.TextDecoder.new()
     decode_stream = to_js({"stream": True})
@@ -390,6 +392,59 @@ async def _fetch_create(item, messages, tools, temperature, max_tokens, on_delta
 # （本地网络连不上 tail 端点），慢或挂时靠它定位是哪一家、卡在哪一步。
 _last_trace: list[dict] = []
 
+# 本次 isolate 生命周期内、每个模型成功接话时记的 token 用量。
+# 累加在内存里、请求末由 entrypoint 落 R2（usage.json）：每步都写一次 R2
+# 会把 I/O 翻倍，而 token 账本晚几百毫秒落盘没有任何影响。
+_usage: dict[str, dict] = {}
+
+
+def usage_snapshot() -> dict:
+    """取走并清零本轮累加的用量。entrypoint 每请求末调。
+
+    必须 copy 一份再清：直接返回 _usage 本身的话，下面 _usage.clear() 会把
+    交给调用方的那个字典也清空——账本会静默变成永远为空。
+    """
+    out = {k: dict(v) for k, v in _usage.items()}
+    _usage.clear()
+    return out
+
+
+_usage_flush = None
+
+
+def bind_usage_flush(fn) -> None:
+    """entrypoint 注入：async fn(snapshot) -> None，把累加的用量落 R2。"""
+    global _usage_flush
+    _usage_flush = fn
+
+
+async def flush_usage() -> None:
+    """把本轮用量交给注入的落盘函数。没注入就是只累加不落盘（离线脚本）。"""
+    if _usage_flush is not None and _usage:
+        try:
+            await _usage_flush(usage_snapshot())
+        except Exception as e:  # 账本写失败绝不能把用户的回答搞挂
+            logger.warning(f"用量落盘失败: {e}")
+
+
+def _note_usage(model: str, usage, input_tokens: int, out_chars: int) -> None:
+    """记一次成功调用的 token 用量。
+
+    provider 报了 usage 就用它；没报就估——输入沿用链上为 max_input_tokens 算好的
+    那个估算值，输出按正文字数折（中英混排取 2 字 1 token）。宁可给个标注过的
+    估算，也不为了精确给各家传 stream_options/include_usage：报错的字段会让
+    整轮直接降级，代价远大于账本精度。
+    """
+    if usage:
+        u_in = _g(usage, "prompt_tokens") or _g(usage, "input_tokens") or input_tokens
+        u_out = _g(usage, "completion_tokens") or _g(usage, "output_tokens") or out_chars // 2
+    else:
+        u_in, u_out = input_tokens, out_chars // 2
+    row = _usage.setdefault(model, {"calls": 0, "input": 0, "output": 0})
+    row["calls"] += 1
+    row["input"] += int(u_in or 0)
+    row["output"] += int(u_out or 0)
+
 
 def last_trace() -> list[dict]:
     return _last_trace[-12:]
@@ -425,6 +480,7 @@ async def _run_chain(create, messages: list[dict], *, tools=None, temperature=0.
         try:
             msg = await create(item, messages, tools, temperature, max_tokens, on_delta)
             _last_trace.append({"model": model_name, "ms": round((time.perf_counter() - t0) * 1000), "ok": True})
+            _note_usage(model_name, msg.get("usage"), tokens, len(msg.get("content") or ""))
             logger.info(f"使用模型: {model_name}")
             return {**msg, "model": model_name}
         except Exception as e:

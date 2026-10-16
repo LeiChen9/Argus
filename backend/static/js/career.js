@@ -5,6 +5,7 @@
 import { el, fold } from "./dom.js";
 import { jobCards } from "./cards.js";
 import { fetchResumes, resumeLink } from "./resume.js";
+import { api } from "./api.js";
 
 const stage = document.getElementById("view-career");
 
@@ -36,7 +37,7 @@ const career = (f, resume) => {
 
 export const loadCareer = () =>
   Promise.all([
-    fetch("/api/careers").then((res) => (res.ok ? res.json() : null)),
+    api("/api/careers").then((res) => (res.ok ? res.json() : null)),
     fetchResumes(),
   ]).then(([doc, resumes]) => {
     // 区分「取不到」和「还没有」：后端没重启时这接口是 404，冒充成「还没跑

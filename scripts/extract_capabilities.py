@@ -22,10 +22,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from common import active_chain, call_llm, clean_llm_json  # noqa: E402
+import os
 from build_careers import build_job_block  # noqa: E402
 
-CAREERS_PATH = ROOT / "data" / "careers.json"
-JOBS_PATH = ROOT / "data" / "boss_jobs.json"
+# 离线管线服务于单个账号：产物落 data/<用户>/，与 R2 上的命名空间一致。
+# 默认 lbb；给别的账号跑离线脚本就 ARGUS_USER=xxx python3 …（Worker 侧由 cookie 决定）。
+USER = os.environ.get("ARGUS_USER", "lbb")
+
+CAREERS_PATH = ROOT / "data" / USER / "careers.json"
+JOBS_PATH = ROOT / "data" / USER / "boss_jobs.json"
 
 MAX_WORKERS = 4
 

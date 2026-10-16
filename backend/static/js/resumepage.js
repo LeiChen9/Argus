@@ -14,6 +14,7 @@
 import { el } from "./dom.js";
 import { go, back as navBack } from "./nav.js";
 import { loadIndex, work } from "./resume.js";
+import { api } from "./api.js";
 
 const list = document.getElementById("resume-list");
 
@@ -126,7 +127,7 @@ const push = (op) => {
 };
 
 const post = async (id, batch) => {
-  const res = await fetch(`/api/resumes/${encodeURIComponent(id)}/edits`, {
+  const res = await api(`/api/resumes/${encodeURIComponent(id)}/edits`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ops: batch, reason: `手改 ${batch.length} 处` }),
@@ -401,7 +402,7 @@ const show = async (id) => {
   if (!id || shown === id) return;
   // 上一份还没提交的改动要先走完再换人，否则会落到刚打开的那份简历头上。
   if (editing) await flush();
-  const doc = await fetch(`/api/resumes/${encodeURIComponent(id)}`)
+  const doc = await api(`/api/resumes/${encodeURIComponent(id)}`)
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null);
   // 简历可能刚被删掉：留在原地，别开一个空页

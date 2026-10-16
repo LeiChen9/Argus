@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 
+import common
 from common import GEMINI_MODEL, render_markdown, call_llm_async, call_llm_stream_async
 from sessions import load as _load_session, save as _save_session
 from utils import load_file
@@ -243,6 +244,7 @@ async def _finish(sid: str, message: str, msg: dict, cards: list | None) -> dict
     sess["history"].append({"role": "user", "content": message})
     sess["history"].append({"role": "assistant", "content": reply})
     await _save_session(sid, sess)
+    await common.flush_usage()  # 一轮结束才落一次用量账本（Me 页看）
     resp = {"reply": render_markdown(reply), "model": msg["model"]}
     if cards:
         resp["jobs"] = cards

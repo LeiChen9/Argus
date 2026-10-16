@@ -1,12 +1,13 @@
 /* Jobs 页：渲染 data/jobs.json 里的持久化岗位。 */
 
 import { jobCard } from "./cards.js";
+import { api } from "./api.js";
 
 const meta = document.getElementById("jobs-meta");
 const grid = document.getElementById("jobs-grid");
 
 export const loadJobs = () => {
-  fetch("/api/jobs")
+  api("/api/jobs")
     .then((res) => res.json())
     .then(({ updated_at, jobs }) => {
       meta.textContent = updated_at ? `${jobs.length} 个活跃岗位 · 更新于 ${updated_at}` : "";

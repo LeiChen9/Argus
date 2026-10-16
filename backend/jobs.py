@@ -8,15 +8,20 @@ entrypoint_worker.py），本模块只留领域函数。job_gaps 已退役，相
 """
 
 import json
+import os
 import time
 from pathlib import Path
 
 from persona import TARGET_KEYS, get_persona
 from utils import load_file, save_file
 
-STORE = Path(__file__).resolve().parents[1] / "data" / "boss_jobs.json"
-GAPS = Path(__file__).resolve().parents[1] / "data" / "job_gaps.json"
-CAREERS = Path(__file__).resolve().parents[1] / "data" / "careers.json"
+# 离线管线服务于单个账号：产物落 data/<用户>/，与 R2 上的命名空间一致。
+# 默认 lbb；给别的账号跑离线脚本就 ARGUS_USER=xxx python3 …（Worker 侧由 cookie 决定）。
+USER = os.environ.get("ARGUS_USER", "lbb")
+
+STORE = Path(__file__).resolve().parents[1] / "data" / USER / "boss_jobs.json"
+GAPS = Path(__file__).resolve().parents[1] / "data" / USER / "job_gaps.json"
+CAREERS = Path(__file__).resolve().parents[1] / "data" / USER / "careers.json"
 
 
 def _now() -> str:

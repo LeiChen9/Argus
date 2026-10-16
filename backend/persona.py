@@ -19,7 +19,12 @@ import time
 from pathlib import Path
 
 from common import GEMINI_MODEL, call_llm_async, clean_llm_json
+import os
 from utils import load_file, save_file_async, store_active
+
+# 离线管线服务于单个账号：产物落 data/<用户>/，与 R2 上的命名空间一致。
+# 默认 lbb；给别的账号跑离线脚本就 ARGUS_USER=xxx python3 …（Worker 侧由 cookie 决定）。
+USER = os.environ.get("ARGUS_USER", "lbb")
 
 logger = logging.getLogger("argus.persona")
 
@@ -66,7 +71,7 @@ RESUME_TO_PERSONA = """分析简历，抽取结构化信息。只输出 JSON，�
 def build_resume_prompt(resume_text: str) -> str:
     return RESUME_TO_PERSONA.format(resume=resume_text)
 
-STORE_PATH = Path(__file__).resolve().parents[1] / "data" / "persona.json"
+STORE_PATH = Path(__file__).resolve().parents[1] / "data" / USER / "persona.json"
 
 MAX_BYTES = 200 * 1024
 ALLOWED_SUFFIX = {".md", ".txt"}

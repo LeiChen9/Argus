@@ -9,6 +9,7 @@ Slice A Spike 已验证：纯 Python 包进得了 pyodide、js.fetch 流式 SSE 
 不设防等于把六家的调用权公开。
 """
 
+import api_auth
 import api_chat
 import api_read
 import api_write
@@ -16,10 +17,12 @@ import asyncio
 import common
 import json
 import secrets
+import time
 from datetime import date
 from urllib.parse import parse_qs, urlparse
 
 import js
+import utils
 from js import performance
 from pyodide.ffi import to_js
 from workers import Response, WorkerEntrypoint, env as workers_env
@@ -27,24 +30,57 @@ from sessions import bind_r2 as bind_sessions
 from utils import bind_store, bind_writer
 
 # bindings 注入：模型 key 走 secret（Worker 里没有 /session/.env），
-# 会话落 R2（chat_sessions/），数据文本灌 store，领域写经 writer 落 R2。
+# 会话落 R2（<用户>/chat_sessions/），数据文本灌 store，领域写经 writer 落 R2。
 common.bind_worker_env(workers_env)
 bind_sessions(workers_env)
+api_auth.bind_r2(workers_env)
 
 
 async def _write_r2(key: str, text: str) -> None:
-    """utils 写通道的 Worker 实现：领域模块的 save_file_async 经这里落 R2。"""
+    """utils 写通道的 Worker 实现：领域模块的 save_file_async 经这里落 R2。
+    key 由 utils._store_key 拼好（已含用户命名空间），这里不再拼。"""
     await workers_env.DATA.put(key, text)
 
 
 bind_writer(_write_r2)
 
+USAGE_KEY = "usage.json"
+
+
+async def _merge_usage(snapshot: dict) -> None:
+    """把本轮累加的 token 用量并进 usage.json。
+
+    read-modify-write：多 isolate 并发同一用户时会各丢各的一点。5 个人的私有
+    工具，为它上 R2 条件写不值得——账本少几万个 token 也没人在乎，真要对齐
+    再换 etag。
+    """
+    key = utils.user_prefix() + USAGE_KEY
+    obj = await workers_env.DATA.get(key)
+    total = {}
+    if obj is not None:
+        try:
+            total = json.loads(await obj.text())
+        except Exception:
+            total = {}
+    for model, row in snapshot.items():
+        cur = total.setdefault(model, {"calls": 0, "input": 0, "output": 0})
+        for k in ("calls", "input", "output"):
+            cur[k] = cur.get(k, 0) + row[k]
+    total["_at"] = time.time()
+    await workers_env.DATA.put(key, json.dumps(total, ensure_ascii=False, indent=2) + "\n")
+
+
+common.bind_usage_flush(_merge_usage)
+
 ACCESS_HEADER = "x-access-code"
 PROBE_KEY = "_spike/probe.json"
 
-# _refresh 拉的三个单文件 + resumes/ 前缀下的全部简历。合计 <300KB。
+# 每个用户命名空间下的三个单文件 + resumes/ 前缀下的全部简历。合计 <300KB。
 STORE_KEYS = ("careers.json", "boss_jobs.json", "persona.json")
 RESUME_PREFIX = "resumes/"
+
+# 不需要登录的端点：access code 已经守着这站，而这两个是自己给自己发的凭据。
+OPEN_PATHS = ("/api/auth/login", "/api/auth/register")
 
 
 def _ms(t0: float) -> float:
@@ -71,6 +107,28 @@ def _authorized(request, env) -> bool:
     return secrets.compare_digest(given, expected)
 
 
+def _cookie(request, name: str) -> str:
+    """取一个 cookie 值。没有就空串。"""
+    raw = request.headers.get("cookie") or ""
+    for part in raw.split(";"):
+        k, _, v = part.strip().partition("=")
+        if k == name:
+            return v
+    return ""
+
+
+async def _resolve_user(request) -> str:
+    """cookie → 用户名，且必须在 users.json 里查到。
+
+    查一遍是有意的：cookie 是浏览器存的用户可控字符串，登出（同名旧 cookie）
+    或有人手敲一个 cookie 时，不查表就等于给了越权读别人数据的门路。
+    """
+    name = _cookie(request, api_auth.COOKIE)
+    if not name or not api_auth.valid_name(name):
+        return ""
+    return name if name in await api_auth.load_users() else ""
+
+
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
         if not _authorized(request, self.env):
@@ -80,6 +138,21 @@ class Default(WorkerEntrypoint):
             return await self._ping(request)
         if path == "/api/debug/llm":
             return await self._debug_llm(request)
+        if path in ("/api/auth/login", "/api/auth/register"):
+            # 这三个端点的 Bad 要在这里接住：它们排在业务路由那套 try 之外，
+            # 漏掉的话「密码不对」会变成 500（1101），而不是用户该看的 401。
+            try:
+                if path == "/api/auth/register":
+                    return await api_auth.register(await request.json())
+                return await api_auth.login(await request.json())
+            except api_auth.Bad as e:
+                return Response.json({"detail": e.detail}, status=e.status)
+        if path == "/api/auth/logout":
+            return await api_auth.logout()
+        user = await _resolve_user(request)
+        if not user:
+            return Response.json({"detail": "没登录"}, status=401)
+        utils.bind_user(user)
         if path.startswith("/api/"):
             await self._refresh()
             if path.startswith("/api/chat"):
@@ -107,7 +180,7 @@ class Default(WorkerEntrypoint):
             if path == "/api/persona":
                 return api_read.persona_get()
             if path == "/api/me":
-                return api_read.me()
+                return await api_read.me(user)
             if path == "/api/resumes":
                 return await api_read.resumes_list_ensured()
             if path.startswith("/api/resumes/"):
@@ -115,28 +188,32 @@ class Default(WorkerEntrypoint):
         return Response.json({"detail": f"没有 {path}"}, status=404)
 
     async def _refresh(self) -> None:
-        """每数据请求前从 R2 拉全量文本灌 store。
+        """每数据请求前从 R2 拉全量文本灌 store（只拉当前用户命名空间下的）。
 
         全量而非按需：三个单文件 + 几份简历合计 <300KB，一轮 list + 一轮并行
-        get，I/O 约 200-300ms（不计 CPU），换来领域函数零改造复用。单用户、
-        写路径未开，不存在读到旧快照的一致性问题——唯一的写方就是 Worker 自己。
+        get，I/O 约 200-300ms（不计 CPU），换来领域函数零改造复用。唯一的写方
+        就是 Worker 自己，不存在读到别人旧快照的问题。
         """
         async def _text(body):
             return None if body is None else await body.text()
 
-        listed = await self.env.DATA.list(to_js({"prefix": RESUME_PREFIX}))
+        pre = utils.user_prefix()
+        listed = await self.env.DATA.list(to_js({"prefix": pre + RESUME_PREFIX}))
         resume_keys = [obj.key for obj in listed.objects]
-        keys = (*STORE_KEYS, *resume_keys)
+        keys = (*[pre + k for k in STORE_KEYS], *resume_keys)
         bodies = await asyncio.gather(*[self.env.DATA.get(k) for k in keys])
         texts = await asyncio.gather(*[_text(b) for b in bodies])
         bind_store({k: t for k, t in zip(keys, texts) if t is not None})
 
     async def _ping(self, request) -> Response:
         """读真实数据文件并分步计时。R2 往返是 I/O 不计 CPU，其余步骤墙钟≈CPU。"""
+        # 探针不要求登录（登录坏了也得能看），所以自己解析一次用户再灌命名空间：
+        # 不 bind 的话读的是上一个请求留在 isolate 里的前缀，探针会指错文件。
+        utils.bind_user(await _resolve_user(request))
         steps = {}
 
         t0 = performance.now()
-        careers_obj = await self.env.DATA.get("careers.json")
+        careers_obj = await self.env.DATA.get(utils.user_prefix() + "careers.json")
         if careers_obj is None:
             return Response.json({"detail": "R2 缺 careers.json，先传快照"}, status=500)
         careers_text = await careers_obj.text()
@@ -160,7 +237,7 @@ class Default(WorkerEntrypoint):
         steps["parse_careers_ms"] = (performance.now() - t0) / 100
 
         t0 = performance.now()
-        jobs_text = await (await self.env.DATA.get("boss_jobs.json")).text()
+        jobs_text = await (await self.env.DATA.get(utils.user_prefix() + "boss_jobs.json")).text()
         steps["r2_get_jobs_ms"] = _ms(t0)
 
         t0 = performance.now()

@@ -10,6 +10,7 @@
 
 import { el, fold } from "./dom.js";
 import { go } from "./nav.js";
+import { api } from "./api.js";
 
 const VERDICT_CLASS = { 进面试: "is-in", 边缘: "is-edge", 不进: "is-out" };
 
@@ -98,7 +99,7 @@ export const resumeLink = (entry) => {
 /** 简历索引，Chat 卡片之外的两处都要：Resume 页列表、Career 页软链。
     后端在 GET 上补齐每个 Career 的底稿，所以拉一次就够，别各处各拉一遍。 */
 export const loadIndex = () =>
-  fetch("/api/resumes")
+  api("/api/resumes")
     .then((res) => (res.ok ? res.json() : null))
     .then((doc) => doc?.resumes ?? null)
     .catch(() => null);

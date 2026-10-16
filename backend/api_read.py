@@ -8,6 +8,7 @@
 
 from workers import Response
 
+import json
 import jobs
 import persona
 import resume
@@ -46,6 +47,20 @@ def persona_get():
     return _json(persona.get_persona())
 
 
-def me():
-    """占位端点（原 me.py 的口径）。"""
-    return _json({"me": {}, "note": "placeholder"})
+async def me(user: str):
+    """Me 页的数据：我是谁 + 我这个账号烧了多少 token（按模型分）。
+
+    usage.json 由 Worker 在每轮 chat 结束时累加（见 entrypoint._merge_usage），
+    这里只读。`_at` 是最后记账的时间戳，前端顺手显示「截至」。
+    """
+    import utils
+    from workers import env as workers_env
+
+    try:
+        obj = await workers_env.DATA.get(utils.user_prefix() + "usage.json")
+        usage = json.loads(await obj.text()) if obj is not None else {}
+    except Exception:
+        usage = {}
+    return _json({"me": {"user": user},
+                  "usage": {k: v for k, v in usage.items() if not k.startswith("_")},
+                  "usage_at": usage.get("_at")})

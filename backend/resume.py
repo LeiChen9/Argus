@@ -21,11 +21,17 @@ from pathlib import Path
 
 from common import GEMINI_MODEL, ask_json_async
 from persona import get_persona
-from utils import apply_patch, list_store_keys, load_file, save_file_async
+import os
+from utils import apply_patch, list_store_keys, load_file, save_file_async, store_active
+
+# 离线管线服务于单个账号：产物落 data/<用户>/，与 R2 上的命名空间一致。
+# 默认 lbb；给别的账号跑离线脚本就 ARGUS_USER=xxx python3 …（Worker 侧由 cookie 决定）。
+USER = os.environ.get("ARGUS_USER", "lbb")
 
 ROOT = Path(__file__).resolve().parents[1]
-CAREERS = ROOT / "data" / "careers.json"
-RESUME_DIR = ROOT / "data" / "resumes"
+CAREERS = ROOT / "data" / USER / "careers.json"
+RESUME_DIR = ROOT / "data" / USER / "resumes"
+RESUME_PREFIX = "resumes/"
 
 # persona 的求职意向三个字段不属于简历。拷贝时剔掉。
 TARGET_KEYS = ("target", "target_base", "target_salary")
@@ -106,12 +112,13 @@ async def apply_edits(career_id: str, ops: list, reason: str) -> dict:
 def resume_paths() -> list[Path]:
     """简历文件清单。Worker 无文件系统，glob 换成 store key 枚举；离线仍 glob。
 
-    两条路都只回「哪些 career 有简历」。Worker 侧 set 非空即 Worker 模式；
-    store 空（离线）时不拦，直接走 glob，行为与从前一致。
+    两条路都只回「哪些 career 有简历」。Worker 侧以 store_active 为准而不是
+    「查到 key 才算 Worker」：某用户一把简历都没有时 store 里当然没有 resumes/
+    这类 key，若照旧落回 glob，就会把**别的用户**（或本地留档）的简历列给
+    他看——枚举不到就返回空，别拿别处的文件凑数。
     """
-    keys = list_store_keys("resumes/")
-    if keys:
-        return [RESUME_DIR / Path(k).name for k in sorted(keys)]
+    if store_active():
+        return [RESUME_DIR / Path(k).name for k in sorted(list_store_keys(RESUME_PREFIX))]
     return sorted(RESUME_DIR.glob("*.json")) if RESUME_DIR.exists() else []
 
 

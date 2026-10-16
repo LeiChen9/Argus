@@ -38,6 +38,31 @@ def bind_store(texts: dict[str, str]) -> None:
     _store.update(texts)
 
 
+# ── 用户命名空间 ────────────────────────────────────────────────────────
+#
+# 用户的 career/job/resume 互不串门，靠的就是「R2 key 前缀 = 用户名」这一条。
+# 收敛在 _store_key / list_store_keys 两个出口上，**领域模块一行都不用改**：
+# jobs/persona/resume 照旧说 data/careers.json，这里替它加上 lbb/ 前缀。
+#
+# 离线脚本不 bind（_USER 为空），前缀为空，老路径逐字节不变。
+_USER = ""
+
+
+def bind_user(username: str) -> None:
+    """entrypoint 每请求解析出用户名后调。空串=未登录（回退到无前缀，等同离线）。"""
+    global _USER
+    _USER = username or ""
+
+
+def current_user() -> str:
+    return _USER
+
+
+def user_prefix() -> str:
+    """R2 上该用户的命名空间。空用户返回空串，key 保持原样。"""
+    return f"{_USER}/" if _USER else ""
+
+
 def put_store(key: str, text: str) -> None:
     """写后把内容同步进 store：同请求内的后续读取要看得见刚写的东西。
 
@@ -54,17 +79,30 @@ def store_active() -> bool:
 
 
 def list_store_keys(prefix: str) -> list[str]:
-    """store 里某前缀下的 key 列表——Worker 侧替代 glob（没有目录可扫）。"""
-    return [k for k in _store if k.startswith(prefix)]
+    """store 里某前缀下的 key 列表——Worker 侧替代 glob（没有目录可扫）。
+
+    收进来的 prefix 是逻辑前缀（领域模块只认「resumes/」），拼上用户命名空间
+    再去 store 里筛。回的是逻辑 key，调用方（resume.py）只取 basename。
+    """
+    full = user_prefix() + prefix
+    return [k[len(_USER) + 1:] for k in _store if k.startswith(full)]
 
 
 def _store_key(path: Path) -> str | None:
-    """本地路径 → R2 key。data/ 下的路径原样映射（persona.json 也在 data/）。
-    其余路径（报告、临时文件）不归 R2 管，永远走本地。"""
+    """本地路径 → R2 key。路径形如 data/<账号>/xxx，R2 上同名——换句话说
+    本机目录结构和 R2 命名空间是同一套（scripts/r2_*.sh 也是这么搬的）。
+
+    所以线上要做的只有一件事：把路径里的账号段换成**当前登录的那个**。领域
+    模块的常量写的是哪个账号（离线脚本可用 ARGUS_USER 换）不影响线上——这里
+    统一改写成 cookie 里那个人。其余路径（报告、临时文件）不归 R2 管，永远走本地。
+    """
     p = Path(path).resolve()
-    if p.is_relative_to(_DATA):
-        return p.relative_to(_DATA).as_posix()
-    return None
+    if not p.is_relative_to(_DATA):
+        return None
+    head, _, tail = p.relative_to(_DATA).as_posix().partition("/")
+    if _USER and tail:
+        return f"{_USER}/{tail}"
+    return f"{head}/{tail}" if tail else head
 
 
 # ── 写通道（Worker 模式）───────────────────────────────────────────────

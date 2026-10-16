@@ -1,6 +1,7 @@
 import { go } from "./nav.js";
 import { jobCards } from "./cards.js";
 import { resumeCard } from "./resume.js";
+import { api } from "./api.js";
 
 const sid = (() => { let v = localStorage.getItem("argus_sid"); if (!v) { v = crypto.randomUUID(); localStorage.setItem("argus_sid", v); } return v; })();
 const msgs = document.getElementById("msgs");
@@ -48,7 +49,7 @@ const showReply = (html) => {
 // 用户切过去时这句话已经在那里了。
 const NO_RESUME_GREETING = "你好呀。还没有你的简历，方便的话传一份给我？我想先认识你一下。";
 
-fetch("/api/persona")
+api("/api/persona")
   .then((res) => res.json())
   .then((data) => {
     if (Object.keys(data).length === 0) show(row("them", NO_RESUME_GREETING));
@@ -86,7 +87,7 @@ document.getElementById("chat-back").addEventListener("click", () => go("home"))
 // 留一句 Argus 的话，不然界面空得突兀。清空会一并退出简历模式，简历卡也收掉。
 document.getElementById("chat-clear").addEventListener("click", async () => {
   try {
-    await fetch("/api/chat/clear", { method: "POST", headers: { "X-Session-Id": sid } });
+    await api("/api/chat/clear", { method: "POST", headers: { "X-Session-Id": sid } });
   } catch (err) {
     show(row("them", `没清成功：${err.message}`));
     return;
@@ -115,7 +116,7 @@ input.addEventListener("input", fit);
 const recoverReply = async (sent) => {
   for (let i = 0; i < 60; i++) {
     try {
-      const res = await fetch("/api/chat/history", { headers: { "X-Session-Id": sid } });
+      const res = await api("/api/chat/history", { headers: { "X-Session-Id": sid } });
       const t = (await res.json()).turn;
       if (t && t.user === sent && t.reply) { showReply(t.reply); return true; }
     } catch {}
@@ -173,7 +174,7 @@ form.addEventListener("submit", async (event) => {
     const body = new FormData();
     body.append("file", picked);
     try {
-      const res = await fetch("/api/persona/init", { method: "POST", body });
+      const res = await api("/api/persona/init", { method: "POST", body });
       const data = await res.json();
       if (!res.ok) {
         show(row("them", `解析失败：${data.detail || res.status}`));
@@ -196,7 +197,7 @@ form.addEventListener("submit", async (event) => {
   fit();
   const pending = showTyping();
   try {
-    const res = await fetch("/api/chat/stream", {
+    const res = await api("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Session-Id": sid },
       body: JSON.stringify({ message }),

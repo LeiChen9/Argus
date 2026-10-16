@@ -16,6 +16,8 @@ TTL 与从前一致（7 天），读时懒删：过期会话当新的用，顺�
 import json
 import time
 
+import utils
+
 TTL = 7 * 24 * 3600
 
 _env = None
@@ -37,10 +39,15 @@ def fresh() -> dict:
     return {"history": [], "resume_career": None, "updated_at": time.time()}
 
 
+def _key(sid: str) -> str:
+    """会话 key 也归到用户命名空间下：别人的 sid 猜到了也读不到。"""
+    return f"{utils.user_prefix()}chat_sessions/{sid}.json"
+
+
 async def load(sid: str) -> dict:
     if _env is None:
         return _mem.get(sid) or fresh()
-    obj = await _env.DATA.get(f"chat_sessions/{sid}.json")
+    obj = await _env.DATA.get(_key(sid))
     if obj is None:
         return fresh()
     try:
@@ -49,7 +56,7 @@ async def load(sid: str) -> dict:
         # 读坏了当没有：这一轮对话从头开始，好过让用户对着 500。
         return fresh()
     if time.time() - s.get("updated_at", 0) > TTL:
-        await _env.DATA.delete(f"chat_sessions/{sid}.json")
+        await _env.DATA.delete(_key(sid))
         return fresh()
     return s
 
@@ -60,6 +67,6 @@ async def save(sid: str, sess: dict) -> None:
         _mem[sid] = sess
         return
     await _env.DATA.put(
-        f"chat_sessions/{sid}.json",
+        _key(sid),
         json.dumps(sess, ensure_ascii=False, indent=2) + "\n",
     )

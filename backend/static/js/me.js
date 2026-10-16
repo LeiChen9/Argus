@@ -5,6 +5,7 @@
 // <用户>/usage.json 的，前端只读不算。
 
 import { api, apiJson } from "./api.js";
+import { go } from "./nav.js";
 
 const el = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -24,6 +25,9 @@ const fmt = (n) => {
 
 // 当前登录框显示的是哪一种（"" = 普通登录/注册）。用来防重画，见下。
 let loginMode = null;
+
+// 已经渲染出账号页（而不是登录框）= 登录成功。
+const boxHasProfile = () => !!root().querySelector(".mecard");
 
 function renderLogin(message) {
   const box = root();
@@ -61,6 +65,8 @@ function renderLogin(message) {
       });
       note.textContent = "";
       await loadMe();
+      // 登录是从 Me 页发起的，成功后把人送回首页——不然他得再点一次顶部 logo。
+      if (boxHasProfile()) go("home");
     } catch (e) {
       note.textContent = e.detail || e.message || "登录失败";
     }
@@ -159,7 +165,7 @@ function selfCheck(user) {
   return wrap;
 }
 
-// 登录状态变了就通知外面（app.js 拿它开关 tabbar）——登录成功后 tabbar 要回来。
+// 登录状态变了就通知外面（app.js 拿它守门：没登录只让进 Me 页）。
 let onAuth = () => {};
 export const onAuthChange = (fn) => { onAuth = fn; };
 
@@ -175,7 +181,7 @@ export async function loadMe() {
   return root();
 }
 
-// 未登录时把用户送到 Me 页（app.js 的 tabbar 闸门用）
+// 未登录时把用户送到 Me 页（app.js 的登录闸门用）
 export async function ensureLogin() {
   try {
     return await apiJson("/api/me");

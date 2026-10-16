@@ -1,4 +1,3 @@
-import { go } from "./nav.js";
 import { jobCards } from "./cards.js";
 import { resumeCard } from "./resume.js";
 import { api } from "./api.js";
@@ -179,7 +178,7 @@ const startEdit = (bubble) => {
   };
 };
 
-document.getElementById("chat-back").addEventListener("click", () => go("home"));
+// 回首页交给顶部那个固定 logo（它压在所有页面上），聊天头部不再自带返回箭头。
 
 // 清空对话上下文。后端历史是内存单例，清掉重启也一样，所以不做二次确认——
 // 说错了重来一遍的成本，远低于点一次「确认」的摩擦。清完把气泡也清掉，

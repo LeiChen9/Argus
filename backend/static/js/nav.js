@@ -1,9 +1,7 @@
 const views = [...document.querySelectorAll(".view")];
-const tabs = [...document.querySelectorAll(".tab")];
-const topbar = document.getElementById("topbar");
-const tabbar = document.getElementById("tabbar");
+const topLogo = document.getElementById("toplogo");
 
-// 详情页不在 tabbar 里，返回时要回到它进来之前的那一页。
+// 详情页不在导航里，返回时要回到它进来之前的那一页。
 let last = "home";
 
 export const go = (name) => {
@@ -12,15 +10,10 @@ export const go = (name) => {
     view.hidden = !on;
     view.classList.toggle("is-active", on);
   }
-  for (const tab of tabs) {
-    tab.setAttribute("aria-selected", String(tab.dataset.view === name));
-  }
   if (name !== "job" && name !== "resumedit") last = name;
-  // 详情页和 Chat 一样是"沉浸式"：tabbar 让位，否则在详情页点 Jobs tab 会撞上
-  // app.js 里"已选中就 return"的短路，卡在原地回不去。
-  const bare = name === "chat" || name === "job" || name === "resumedit";
-  topbar.hidden = bare;
-  tabbar.hidden = bare;
+  // 顶部 logo 就是回首页的入口（fixed，压在所有页面之上）。已经在首页时不必
+  // 显示——点它什么都不会发生，纯占地方。
+  if (topLogo) topLogo.hidden = name === "home";
 };
 
 export const back = () => go(last);

@@ -23,38 +23,37 @@ const span = (className, text) => {
 const { lead, hook } = greeting();
 el.replaceChildren(span("greet__lead", lead), span("greet__hook", hook));
 
-document.getElementById("wordmark").addEventListener("click", () => go("home"));
-
 // 会话失效（cookie 没了、别人登了同一个账号）就把人送回 Me 页重新登录：
 // 其余页面留着只会各自弹一个报错，没人知道该干嘛。
 whenUnauthorized(() => { go("me"); loadMe(); });
 
-// 登录闸门：没登录时只留 Me 页（登录/注册），登录后把 tabbar 和其它 tab 放回来。
-// 每个请求返回的也是数据，一屏全灰比一个登录框更让人困惑。
-const bar = document.getElementById("tabbar");
-const applyGate = (loggedIn) => {
-  for (const tab of document.querySelectorAll(".tab")) tab.hidden = !loggedIn && tab.dataset.view !== "me";
-  bar.hidden = !loggedIn;
-};
-onAuthChange(applyGate);
+// 未登录时不许进别的页面：它们每个都会各自弹一句「没登录」，不如直接把人
+// 送到 Me 页。登录后这个限制自然解除（登录本来就是在那儿完成的）。
+let loggedIn = false;
+onAuthChange((on) => {
+  loggedIn = on;
+  if (!on) go("me");
+});
 
-for (const tab of document.querySelectorAll(".tab")) {
-  tab.addEventListener("click", () => {
-    if (tab.getAttribute("aria-selected") === "true") return;
-    go(tab.dataset.view);
-    if (tab.dataset.view === "resume") loadResume();
-    if (tab.dataset.view === "jobs") loadJobs();
-    if (tab.dataset.view === "career") loadCareer();
-    if (tab.dataset.view === "me") loadMe();
-  });
+// 导航：底部 tabbar 去掉了，入口集中在首页那一排。
+const enter = (view) => {
+  if (view !== "me" && !loggedIn) { go("me"); return; }
+  go(view);
+  if (view === "resume") loadResume();
+  if (view === "jobs") loadJobs();
+  if (view === "career") loadCareer();
+  if (view === "me") loadMe();
+};
+
+for (const item of document.querySelectorAll(".homenav__item")) {
+  item.addEventListener("click", () => enter(item.dataset.view));
 }
 
-// 进站先认一下身份：没登录就把人落在 Me 页。
-// 顺序有讲究：先 go("me")（它会把 tabbar 放回来），再 applyGate(false) 压回去——
-// 反过来的话 tabbar 会留在屏幕上。
+// 顶部固定 logo：任何页面点它都回首页。
+document.getElementById("toplogo").addEventListener("click", () => go("home"));
+
+// 进站先认一下身份：没登录就落在 Me 页；**已经登录的别把人扣在 Me 页**——
+// 底部栏去掉了，从那儿再点一次 logo 才能回首页，等于登录完先迷路一下。
 loadMe().then((box) => {
-  if (box.querySelector(".meform")) {
-    go("me");
-    applyGate(false);
-  }
+  go(box.querySelector(".meform") ? "me" : "home");
 });

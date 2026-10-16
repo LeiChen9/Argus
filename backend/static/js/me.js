@@ -122,7 +122,7 @@ function renderProfile(data) {
   });
   box.append(out);
 
-  box.append(selfCheck());
+  box.append(selfCheck(data.me.user));
 }
 
 // 自检：把三个页面的接口逐个打一遍，把状态和条数写在屏幕上。
@@ -132,9 +132,9 @@ function renderProfile(data) {
 // 两种病两种药。没有这一屏就只能在浏览器控制台里猜。
 // 返回的是节点本身，**不是 async**：写成 async 的话 box.append(selfCheck())
 // 塞进去的是个 Promise，页面显示 [object Promise]，自检一条都出不来。
-function selfCheck() {
+function selfCheck(user) {
   const wrap = el("div", "meusage");
-  wrap.append(el("div", "meusage__title", "数据自检"));
+  wrap.append(el("div", "meusage__title", `数据自检（当前账号：${user}）`));
   const targets = [["/api/careers", "careers"], ["/api/jobs", "jobs"], ["/api/resumes", "resumes"]];
   for (const [path, name] of targets) {
     const nums = el("span", "meusage__nums", "…");
@@ -146,8 +146,10 @@ function selfCheck() {
       let detail;
       try {
         const doc = JSON.parse(body);
-        const count = doc.careers?.length ?? doc.resumes?.length ?? (doc.jobs?.length ?? "-");
-        detail = res.ok ? `${count} 条` : `HTTP ${res.status}`;
+        // 数量取不到就把原文头一截也带上——「0 条」到底是空数组还是别的形状，
+        // 光看一个数字分不出来，而这正是最该看清的时候。
+        const n = doc.careers?.length ?? doc.resumes?.length ?? doc.jobs?.length;
+        detail = res.ok ? (n == null ? body.slice(0, 40) : `${n} 条`) : `HTTP ${res.status} ${body.slice(0, 30)}`;
       } catch { detail = `HTTP ${res.status}`; }
       nums.textContent = `${detail}（${res.status}）`;
     }).catch((e) => {

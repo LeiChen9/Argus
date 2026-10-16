@@ -89,6 +89,25 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _no_store(resp):
+    """给响应打上 Cache-Control: no-store，再交出去。
+
+    **必须给接口响应也打，不只是静态资源**（后者靠 assets 的 _headers）：
+    这个站的每个接口都因人而异，而接口响应本来没有任何 cache 头，浏览器和
+    中间代理就会按启发式规则把它存下来。实测踩过：改版期间 /api/careers 恰好
+    返回过一次空数组（双重前缀的 bug），它被存下来之后，用户那边就一直看到
+    「0 条」——清了缓存、换了浏览器都一样，因为响应是旧的。
+
+    只能重新构造：workers 运行时里 Response.headers 建好之后就是只读的。
+    """
+    try:
+        headers = {k: v for k, v in dict(resp.headers).items()}
+        headers["cache-control"] = "no-store, max-age=0"
+        return Response(resp.body, status=resp.status, headers=headers)
+    except Exception:
+        return resp
+
+
 def _cookie(request, name: str) -> str:
     """取一个 cookie 值。没有就空串。"""
     raw = request.headers.get("cookie") or ""
@@ -115,9 +134,9 @@ class Default(WorkerEntrypoint):
     async def fetch(self, request):
         path = urlparse(request.url).path
         if path == "/api/ping":
-            return await self._ping(request)
+            return _no_store(await self._ping(request))
         if path == "/api/debug/llm":
-            return await self._debug_llm(request)
+            return _no_store(await self._debug_llm(request))
         if path in ("/api/auth/login", "/api/auth/register"):
             # 这三个端点的 Bad 要在这里接住：它们排在业务路由那套 try 之外，
             # 漏掉的话「密码不对」会变成 500（1101），而不是用户该看的 401。
@@ -128,44 +147,44 @@ class Default(WorkerEntrypoint):
             except api_auth.Bad as e:
                 return Response.json({"detail": e.detail}, status=e.status)
         if path == "/api/auth/logout":
-            return await api_auth.logout()
+            return _no_store(await api_auth.logout())
         user = await _resolve_user(request)
         if not user:
-            return Response.json({"detail": "没登录"}, status=401)
+            return _no_store(Response.json({"detail": "没登录"}, status=401))
         utils.bind_user(user)
         if path.startswith("/api/"):
             await self._refresh()
             if path.startswith("/api/chat"):
                 try:
-                    return await api_chat.dispatch(path, request)
+                    return _no_store(await api_chat.dispatch(path, request))
                 except api_chat.Bad as e:
-                    return Response.json({"detail": e.detail}, status=e.status)
+                    return _no_store(Response.json({"detail": e.detail}, status=e.status))
             if path == "/api/persona/init" or path == "/api/persona/targets":
                 try:
                     if path == "/api/persona/init":
-                        return await api_write.persona_init(request)
-                    return await api_write.persona_targets(request)
+                        return _no_store(await api_write.persona_init(request))
+                    return _no_store(await api_write.persona_targets(request))
                 except api_write.Bad as e:
-                    return Response.json({"detail": e.detail}, status=e.status)
+                    return _no_store(Response.json({"detail": e.detail}, status=e.status))
             if path.startswith("/api/resumes/") and path.endswith("/edits"):
                 cid = path[len("/api/resumes/"):-len("/edits")]
                 try:
-                    return await api_write.resume_edits(cid, request)
+                    return _no_store(await api_write.resume_edits(cid, request))
                 except api_write.Bad as e:
-                    return Response.json({"detail": e.detail}, status=e.status)
+                    return _no_store(Response.json({"detail": e.detail}, status=e.status))
             if path == "/api/jobs":
-                return api_read.jobs_list()
+                return _no_store(api_read.jobs_list())
             if path == "/api/careers":
-                return api_read.careers_list()
+                return _no_store(api_read.careers_list())
             if path == "/api/persona":
-                return api_read.persona_get()
+                return _no_store(api_read.persona_get())
             if path == "/api/me":
-                return await api_read.me(user)
+                return _no_store(await api_read.me(user))
             if path == "/api/resumes":
-                return await api_read.resumes_list_ensured()
+                return _no_store(await api_read.resumes_list_ensured())
             if path.startswith("/api/resumes/"):
-                return api_read.resumes_get(path[len("/api/resumes/"):])
-        return Response.json({"detail": f"没有 {path}"}, status=404)
+                return _no_store(api_read.resumes_get(path[len("/api/resumes/"):]))
+        return _no_store(Response.json({"detail": f"没有 {path}"}, status=404))
 
     async def _refresh(self) -> None:
         """每数据请求前从 R2 拉全量文本灌 store（只拉当前用户命名空间下的）。

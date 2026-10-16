@@ -50,8 +50,13 @@ def persona_get():
 async def me(user: str):
     """Me 页的数据：我是谁 + 我这个账号烧了多少 token（按模型分）。
 
-    usage.json 由 Worker 在每轮 chat 结束时累加（见 entrypoint._merge_usage），
+    usage.json 由 Worker 在每轮对话结束时累加（见 entrypoint._merge_usage），
     这里只读。`_at` 是最后记账的时间戳，前端顺手显示「截至」。
+
+    store 那一组是排障用的：careers/jobs/resumes 读的是 utils 的 store（每请求
+    由 entrypoint._refresh 灌），而 /api/me 自己不读 store。症状是「me 正常、
+    三个数据接口全空」时，只有把 store 的实际 key 打出来才知道断在哪一步——
+    是没灌进去，还是灌进去的 key 和 load_file 要找的 key 对不上。
     """
     import utils
     from workers import env as workers_env
@@ -61,6 +66,12 @@ async def me(user: str):
         usage = json.loads(await obj.text()) if obj is not None else {}
     except Exception:
         usage = {}
+    import jobs
+    import resume
     return _json({"me": {"user": user},
                   "usage": {k: v for k, v in usage.items() if not k.startswith("_")},
-                  "usage_at": usage.get("_at")})
+                  "usage_at": usage.get("_at"),
+                  "store_keys": sorted(utils.store_keys()),
+                  "prefix": utils.user_prefix(),
+                  "want_careers": utils.store_key(jobs.CAREERS),
+                  "want_resumes": utils.store_key(resume.RESUME_DIR / "C1.json")})

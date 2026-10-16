@@ -1,6 +1,6 @@
 """岗位 × 简历差距分析。
 
-读 data/boss_jobs.json 与 backend/persona.json，对**每个岗位单独**调一次 Gemini
+读 data/boss_jobs.json 与 data/persona.json，对**每个岗位单独**调一次 Gemini
 做深度差距分析，把 LLM 的原始返回落盘到 data/job_gaps.json。
 
 单 job 单次调用是刻意的：各岗位之间无依赖，这样每条分析都独立可复现、
@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from common import active_chain, call_llm, clean_llm_json  # noqa: E402
 
-PERSONA_PATH = ROOT / "backend" / "persona.json"
+PERSONA_PATH = ROOT / "data" / "persona.json"
 JOBS_PATH = ROOT / "data" / "boss_jobs.json"
 OUT_JSON = ROOT / "data" / "job_gaps.json"
 

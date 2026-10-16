@@ -20,70 +20,71 @@ Last updated: 2026-10-09
 
 | 层 | 选型 | 决策理由 |
 |---|---|---|
-| Backend | **Python + FastAPI** | 用户指定 Python（熟悉）。FastAPI 自动出 `/docs`，Pydantic 类型化便于后续接 LLM 流式响应。 |
-| Frontend | **静态 HTML + 原生 JS** | 无构建步骤、无 node 工具链进应用路径。改完刷新即见，Phase 1 迭代最快。 |
-| Storage | **JSON 文件，无 DB、无 ORM** | 单用户单进程，慢的是 LLM 不是存储。`data/boss_jobs.json`（岗位覆盖快照）+ `backend/persona.json`（简历解析结果），都在 `.gitignore` 里 |
-| LLM Provider | 多家 OpenAI 兼容端点，全部 key 在 `.env` | `.env` 已被 gitignore；`.env` 不入库。免费模型优先、付费兜底，见下方「LLM 容灾链」。 |
+| Runtime | **Cloudflare Python Worker**（pyodide）+ Workers Static Assets | 2026-10-16 从本机 FastAPI 迁来：线上负载只是 chat + 读，不需要常驻本机。入口见「部署」。 |
+| Backend | **Python（核心逻辑不换语言）** | 用户指定 Python（熟悉）。FastAPI/uvicorn 已退役——pyodide 装不了，路由层是手写分发（`entrypoint_worker.py`）。 |
+| Frontend | **静态 HTML + 原生 JS** | 无构建步骤、无 node 工具链进应用路径。Workers Assets 原样托管，SPA 回退。 |
+| Storage | **R2（线上）+ data/ 镜像（本地）**，无 DB、无 ORM | 单用户。key 布局见「部署」；离线脚本与 Worker 跑同一份领域代码，`store_active()` 切双模式。 |
+| LLM Provider | 多家 OpenAI 兼容端点，双传输 | 离线 openai SDK / Worker `js.fetch`（pyodide 装不了 SDK）。key 在 Worker secret（线上）/ `.env`（离线）。免费模型优先、付费兜底。 |
 
 ### LLM 容灾链
 
-`common.MODEL_CHAIN` 是一个有序列表，`call_llm` 逐个试，第一个成功的即返回。
+`common.MODEL_CHAIN` 是一个有序列表，`_run_chain` 逐个试，第一个成功的即返回。
 链首全是免费模型，付费模型在后兜底：`agnes-3.0-flash` → `inclusionai/ling-3.1-flash`
 → `nvidia/nemotron-3-ultra-550b-a55b:free`（kilo 网关）→ Groq 的 `gpt-oss-120b` /
-`gpt-oss-20b` / `qwen3.8-27b` → `gemini-3.5-flash` → `glm-4.7-flash` →
-`deepseek-v4-flash`。`active_chain` 还会把不在开放时段的 DeepSeek 剔掉。
+`gpt-oss-20b` / `qwen3.8-27b` → `gemini-3.5-flash` → `deepseek-v4-flash`。
+`active_chain` 还会把不在开放时段的 DeepSeek 剔掉（峰段按北京时间，显式 UTC+8）。
 
 三个免费端点各有各的坑，都是实测出来的：
 
-- **Groq 直连 403**，只能走 macOS 系统代理（`127.0.0.1:8118`）。OpenAI SDK 的 httpx
-  默认 `trust_env=True`，会自动吃系统代理，所以代码里不用写代理；代理一停 Groq
-  就挂，靠 `call_llm` 的 except 兜住。
-- **Groq 输入上限 8000 token/分钟**，超了直接 413，而 `crawler.py` 每次送
-  `html[:80000]`（≈2 万 token）。所以链目支持 `max_input_tokens`，`call_llm` 用
-  tiktoken 估算后提前跳过，不去撞那三次 413。闸门只对 Groq 生效，其他模型不限。
+- **Groq 从 Cloudflare 边缘可达**（中国 IP 直连的 403 问题在 Worker 上消失）；
+  离线脚本仍要走系统代理。链目支持 `max_input_tokens`，token 估算（字符启发式）
+  超限提前跳过，不去撞 413。
 - **kilo 必须写全模型名**。group 别名（如 `kilo`）会解析到别的模型，且返回的
-  `content` 可能是 `None`。
+  `content` 可能是 `None`。**nemotron 会挂请求**（收了不吐字节），链上有 20s
+  超时兜底降级。
+- **Gemini 3 的 thought_signature**：多轮工具调用必须把上轮 tool_calls 的
+  `extra_content` 原样带回，否则 400。chat.answer 里因此直接透传 dict。
+
+工具轮（chat 的 agent loop）`pinned=gemini`：链首小模型带 tools 会每步都调
+工具、四步跑满落不下正文（实测 126s 空回复）。`max_tokens=1024` 而非 8192：
+SYSTEM_PROMPT 要求「每次只输出一两句话」，弱模型给大额度会 rampble（实测单轮 73s）。
 
 ### Storage 说明
 
 早期 tech_doc 写的是 SQLite，那是**计划**不是现状：`backend/` 里没有任何 `sqlite3`
-引用，`db.sqlite3` 的 gitignore 条目是那份计划留下的残留。
+引用。现在的形态是 R2（线上）+ 本地 `data/` 镜像，见「部署」与 `data/README.md`。
 
 岗位数据物理含义是**覆盖快照**而非追加（`save_snapshot` 按 id 去重合并，新批次覆盖
-旧值），写入时过滤掉 `jd` 为空的岗位。数据量级是几十条，`/api/jobs` 全量返回前端，
-没有分页。真的到需要分页或并发写的那天再谈迁移，不要提前抽象 DAL。
+旧值），写入时过滤掉 `jd` 为空的岗位。数据量级是几十条，全量返回前端，没有分页。
+真的到需要分页或并发写的那天再谈迁移，不要提前抽象 DAL。
 
 ## Layout
 
 ```
 backend/
-  main.py                      FastAPI app + no-store 中间件
-  chat.py                      /api/chat Agent 循环与工具注册、/api/persona*、/api/chat/clear
-  tools.py                     Agent 工具实现：四个只读工具、search_jobs、auto_compact
-  jobs.py                      /api/jobs、/api/jobs/{id}/analysis、/api/careers、normalize、save_snapshot、gaps_by_job
-  crawler.py                   BOSS CDP 采集 + 猎聘回退
-  persona.py                   简历解析与 Persona 落盘
-  common.py                    .env 读取、LLM 容灾链、markdown 渲染
-  me.py                        /api/me 占位
-  static/
-    index.html                 由 FastAPI StaticFiles 直接 serve
-    css/app.css                设计系统，移植自 FluentChat；含岗位详情、AI 解读与 Career 段
-    js/app.js                  tab 切换 + 招呼语注入 + 引入 chat.js + initJobDetail
-    js/chat.js                 气泡渲染 / 调 /api/chat / 上传 chip / 清空上下文
-    js/jobs.js                 Jobs 页拉 /api/jobs
-    js/career.js               Career 页拉 /api/careers，渲染 Career 卡片
-    js/cards.js                岗位卡片（Chat 横滑轨道、Jobs 网格、Career 内轨道共用）
-    js/job.js                  岗位详情：hash 路由 + 岗位本体渲染 + 拉解读
-    js/analysis.js             AI 解读渲染：结论、要求拆解、面试打法、补齐行动
-    js/dom.js                  el / deRadical / fold，job.js 与 analysis.js 共用
-    js/nav.js                  视图切换 + 返回来源记忆
-    js/greeting.js             时段×星期招呼语
-    assets/argus-anime.jpeg    NPC 源图（用户设计）
-    assets/argus-anime.webp    带 alpha，页面实际使用
-worker-proxy/
-  worker.js                    公网入口，读 KV 得上游地址
-  wrangler.jsonc               KV binding
-scripts/restart.sh             起本机 + 拉 tunnel + 写 KV + 校验
+  entrypoint_worker.py         Worker 入口：路由表、access code、_refresh 灌 store、
+                               bindings 注入（模型 key / session / writer）
+  api_read.py                  只读 API：jobs / careers / persona / me / resumes
+  api_chat.py                  chat HTTP 层：四端点、SSE（TransformStream + 5s 心跳）
+  api_write.py                 写路径：persona 上传/意向、resume 手改
+  sessions.py                  会话存取：R2 chat_sessions/{sid}.json + 7 天 TTL
+  chat.py                      Agent 循环、工具注册表、system prompt 拼装
+  tools.py                     Agent 工具实现：只读工具、analyze_jd、auto_compact
+  jobs.py                      岗位领域：normalize、save_snapshot、job_cards、career_documents
+  crawler.py                   BOSS CDP 采集 + 猎聘回退（只归离线）
+  persona.py                   简历解析与 Persona（async 写，R2/本地双模式）
+  resume.py                    简历领域：底稿、apply_edits、critique（async 写）
+  common.py                    .env/secret 读取、容灾链（双传输）、markdown、token 启发式
+  utils.py                     load_file/save_file(_async) + store 双模式 + patch + tool 外壳
+  static/                      前端原样托管（Workers Assets）
+wrangler.jsonc                 argus-web：python_workers flag、assets、R2 binding
+python_modules/                vendor 的 workers-py SDK 与应用依赖（gitignore）
+scripts/
+  build_careers.py             岗位 → ≤3 个 Career（可丢弃）
+  extract_capabilities.py      逐 Career 抽能力
+  cluster_jobs.py              legacy gaps，已停用
+  r2_pull.sh                   Web 写的拉回本地
+  r2_push.sh                   离线产物推上 R2
 tech_doc.md         本文件
 dev_log.md          开发日志
 ```
@@ -162,122 +163,68 @@ send 按钮 8.01。均过 WCAG AA（文本 4.5:1）。
 
 ## Run
 
+线上跑在 Cloudflare Worker（见下一节），本地只剩**离线管线**：爬虫、聚类、
+抽能力。先 `source activate echo`（Python 3.10.20）。
+
 ```bash
-source activate echo
-uvicorn main:app --app-dir backend --port 7800
+# 数据同步（方向规则见 data/README.md）：Web 写的拉回，离线写的推走
+bash scripts/r2_pull.sh
+bash scripts/r2_push.sh
+
+# 管线
+python3 scripts/build_careers.py           # 岗位 → ≤3 个 Career，允许丢弃
+python3 scripts/extract_capabilities.py    # 逐 Career 抽能力
+python3 scripts/cluster_jobs.py            # legacy，已停用
 ```
 
-访问 `http://localhost:7800`（页面）/ `http://localhost:7800/docs`（API 文档）。
+Career 上限 3 个（`build_careers.py::MAX_CAREERS`）：招聘平台只让留 3 份简历，
+多了用户也看不过来；归不进任何 Career 的岗位允许丢弃，main 会打印丢弃名单。
 
-**端口 7800。** 本机同时有别的程序在跑 localhost 测试，Argus 固定占 **7800**。
-历史：曾是 8010；更早的 8000 被一个遗留的 `python -m http.server 8000` 占过
-（它 listen 在 IPv6 `*:8000`，会劫持 `localhost` 的 IPv6 解析，表现为收到 501）。
+## 部署（Cloudflare Worker + R2）
 
-端口只出现在本节，**代码里没有硬编码端口**。换端口只改这一行。
+**2026-10-16 迁移完成，本机不再是运行时。** 入口
+`https://argus-web.luent-hat.workers.dev`（Worker，免费档）。所有请求先过
+access code：`X-Access-Code` 头或 `?code=` 查询参数，密钥是 Worker secret
+`ACCESS_CODE`——Worker 持有六家 LLM key，不设防等于公开调用权。
 
-### 重启后拉什么
-
-两样，都不随开机自启：
-
-```sh
-cd /Users/riceball/Documents/Projs/Argus
-
-# 1. 后端（7800）。隧道指向它，不起就没东西可代理
-source activate echo
-uvicorn main:app --app-dir backend --port 7800 &
-
-# 2. 公网入口。隧道 + 写 KV + 校验，一步到位
-sh scripts/restart.sh
-
-# 3. 看门狗（可选）。探公网，连续 2 次失败自动重跑第 2 步
-nohup sh scripts/watchdog.sh >/tmp/watchdog.log 2>&1 &
-```
-
-`restart.sh` 自己也会起 7800（检测到没监听才起），所以第 1 步可以省。
-日志：`/tmp/uvicorn_7800.log`、`/tmp/quick.log`（隧道）、`/tmp/watchdog.log`（看门狗，
-空 = 健康）。
-
-## 公网访问（Cloudflare Tunnel）
-
-不做 Workers 迁移（FastAPI + 本地文件存储 + 本机浏览器探针跑不上 Workers），
-用 Cloudflare Tunnel 把本机 7800 暴露出去。
-
-**入口域名是固定的，不随重启变**：`https://argus-proxy.luent-hat.workers.dev`
-（workers.dev 子域，账号自带，免费，不需要买域名）。变的只有它背后的上游地址。
-
-- 链路：`固定 workers.dev 域名` → `argus-proxy Worker` →（读 KV 得地址）→ `cloudflared --url` 随机 `*.trycloudflare.com` → `localhost:7800`
-- **上游地址存 KV（`ORIGIN_KV` 绑定），不写死在 `worker.js`。** 换上游 = 写一次 KV，
-  **不需要 `wrangler deploy`**。这是本方案能免域名的原因
-- 一键重绑：`./scripts/restart.sh` = 起 7800 + 拉新 quick URL + 探测可达 + 写 KV + 校验公网 30 条。任何一步失败都在写 KV 之前退出，线上代码不受影响
-- `cloudflared --url` 拿不到地址时**必须整段放弃**。早期版本继续往下走，`sed` 把
-  `ORIGIN` 洗成空串并部署上线，公网入口直接瘫，且报错发生在好几步之后
-- 探测和校验走 `http://127.0.0.1:8118` 代理：直连 trycloudflare 在本地网络下常超时，
-  用直连当判据会把好隧道误杀
-- **改 KV 是自动的**，在 `restart.sh` 里，拿地址 → 验隧道 → 写 KV → 验公网一条龙。
-  手动改只在脚本**中途失败**时才需要（它会在写 KV 前退出，此时线上仍指向旧上游）
-- **`workers.dev` 在本地网络下 DNS 被污染**：直连解析到 `157.240.7.8`（Facebook 的段），
-  `dig @1.1.1.1` / `@8.8.8.8` 给的也全是假地址。`cloudflare.com` / `trycloudflare.com`
-  解析正常，只有 `workers.dev` 整个域被污染。所以**本机直连公网入口必然失败**，
-  是网络环境问题不是代码问题，换网络（手机热点）即可。验证一律走 8118 代理
-
-- **已知做不到（2026-10-09 实测）**：不买域名无法让 Worker 直连 named tunnel。
-  `UUID.cfargotunnel.com` 返回 403/1102（该子域只代理同账户内的 DNS 记录），
-  Workers VPC 绑定 tunnel 在本账户报 10002。免域名的稳定上游只有 KV 这条路
-- `cloudflared` 用 homebrew 装；`cert.pem` 缺失时 `tunnel list` 会报错，
-  需要重新 `tunnel login`（FluentChat 走 wrangler，不共用这份授权）
-
-### 隧道注册失败（2026-10-10 实测）
-
-公网入口 530 = Worker 活着但取不到上游，往下查是隧道本身没建立。两种错要分清：
-
-| 现象 | 含义 |
-| --- | --- |
-| `Unauthorized: Tunnel not found`（循环重试） | 拿到 URL 了但**注册没成功**，隧道不存在 |
-| `failed to request quick Tunnel: context deadline exceeded` | 连 quick tunnel 都没申请到 |
-
-第二种是**间歇性**的，不是配置问题：手工发同样的
-`POST https://api.trycloudflare.com/tunnel` 每次都成功、耗时 4–5 秒，
-延迟偏高，`cloudflared` 的等待窗口偶尔就错过。**重试即可，通常第 2 次就通。**
-实测一轮 `restart.sh` 三次全超时、手动重试第 1 次就成了——这个随机性只能靠重试缓解，
-根治要换 named tunnel，而免域名方案下那条路走不通（见上）。
-
-注意「Tunnel not found」会伪装成好地址：`grep -oE` 照样能抓到
-`https://xxx.trycloudflare.com`，**地址存在 ≠ 隧道存在**，得用
-`curl -x http://127.0.0.1:8118 "$URL/api/jobs"` 实际探到数据才算数。
-`restart.sh` 的重试循环因此把「拿地址」和「探测」合成一轮，三轮都探不通才放弃。
-
-`restart.sh` 里另有一个 `set -e` 的坑：没有进程可杀时 `pkill` 返回 1，
-`set -e` 会直接干掉整个脚本——第二轮开始常常就是这样（上一轮的 cloudflared
-已经自己退出了）。必须 `pkill ... || true`。
-
-### 看门狗（2026-10-10）
-
-`scripts/watchdog.sh`，探端点、连续 2 次失败就调 `restart.sh` 换隧道。
-5 分钟一探。
-
-**不检测 DNS。** 这批实测故障里 DNS 全程正常（`api.trycloudflare.com` 正常解析到
-Cloudflare 段），坏的是 `cloudflared` 注册超时和隧道进程自己退出。按 DNS 判会漏掉这两种。
-真正被污染的只有 `workers.dev`，那影响本机直连，跟隧道存活是两回事。
-
-**两个端点都要 200**：quick URL 活 = 隧道在；公网入口活 = Worker + KV 链路通。
-只探一个会漏——隧道活着但 KV 写坏，公网入口照样 530。
-
-同一个 `grep` 坑在这里是致命的另一种形态：cloudflared 申请失败时打的
-`Post "https://api.trycloudflare.com/tunnel"` 会被 `grep -oE` 捞成隧道地址，
-探它必然成功，**看门狗就永远健康、永远不触发**。必须排除 `^https://api\.`。
-
-连续 2 次才动手：单次失败多半是抖动，而重启必然掉线，误触发的代价是真断线。
-恢复不是瞬时的——KV 最终一致，实测从触发到公网入口 200 要 40 秒左右，中间是 530。
-
-```sh
-nohup sh scripts/watchdog.sh >/tmp/watchdog.log 2>&1 &   # 起
-pkill -f "scripts/watchdog.sh"                            # 停
-```
-
-停的时候**必须带 `scripts/` 限定**：`pkill -f watchdog` 会连系统的
-`/usr/libexec/watchdogd` 一起杀掉。
-
-重启电脑后不会自启，详见 `## Run` 的「重启后拉什么」。
+- **形态**：Workers Static Assets（`backend/static` 原样托管，SPA 回退）
+  + Python Worker（`compatibility_flags: ["python_workers"]`，入口
+  `backend/entrypoint_worker.py`）。FastAPI / uvicorn 已退役。
+- **数据在 R2**（bucket `argus-data`，私有）：key = `careers.json` /
+  `boss_jobs.json` / `persona.json` / `resumes/*.json` / `chat_sessions/*.json`。
+  每个数据请求前 `_refresh` 全量灌进 `utils` 的 store（<300KB，R2 往返约
+  200ms，I/O 不计 CPU），领域函数 `load_file` 缓存优先、未命中退本地——
+  **离线与 Worker 跑同一份代码**，`store_active()` 切双模式。写路径同构：
+  `save_file_async` 经注入的 writer 落 R2，写后同步进 store（同请求的后续
+  读取要看得见刚写的内容）。
+- **LLM 双传输**：pyodide 装不了 openai（httpx 依赖 socket），Worker 侧
+  `js.fetch` 直打各家 OpenAI 兼容端点；容灾链主循环只有一份（`_run_chain`），
+  传输以回调注入。离线脚本照旧走 SDK（同步入口 `call_llm`，asyncio.run 包装）。
+  token 估算用字符启发式（tiktoken 有 Rust 扩展装不了）：西文 4 字符/token、
+  CJK 1 字/token，刻意高估。Gemini 3 多轮工具调用必须原样回带 tool_calls 的
+  `thought_signature`，重建三件套会 400。
+- **session 落 R2**：`sessions.py`，`chat_sessions/{sid}.json`，7 天 TTL
+  读时懒删。免费档请求散在多个边缘节点，内存会话十次有九次恢复不到——
+  这就是它必须在 R2 的原因。
+- **Python 依赖** vendor 在 `python_modules/`（workers-py SDK + chinese-calendar
+  + markdown-it-py，`uv pip install --target`，gitignore，换机器要重建）。不用
+  requirements.txt：远端运行时会用 site-packages 的 workers shim 盖回去。
+- **密钥**全走 `wrangler secret put`：`ACCESS_CODE` + 五家模型 key
+  （`AGNES_API_KEY` 等，名字见 `common.ENDPOINTS`）。本地开发用 `.dev.vars`。
+- **部署**：`CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy`。验 bundle 不泄密：
+  `wrangler deploy --dry-run --outdir d` 后 grep `.env`。
+- **排障**：`NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:8118 npx wrangler
+  tail`（本地网络直连不上 tail 端点，必须走 8118 代理）；chat 响应自带
+  `model`/`chain`/`session_backend` 诊断字段；`GET /api/ping` 带分步耗时与
+  chain trace；`POST /api/debug/llm` 可指定模型/pinned 单发。
+- **免费档实测边界**（2026-10-16）：10ms CPU/请求。读取路径（refresh + 解析 +
+  markdown）稳定通过；token 启发式曾是 CPU 炸弹（逐字符 Python 循环，实测
+  1101 超限），改 C 级 encode 后 18.5ms→0.13ms。LLM 等待是 I/O 不计 CPU。
+  groq 从边缘可达（中国 IP 的 403 消失）；kilo 的 nemotron 会挂请求，链上
+  有 20s 超时兜底降级。
+- **已退役**（2026-10-16 删）：cloudflared 隧道、`argus-proxy` Worker + KV、
+  `scripts/restart.sh`、`scripts/watchdog.sh`、uvicorn、`backend/main.py`、
+  `me.py`、`routes_legacy.py`。
 
 ## 岗位详情（2026-10-09）
 

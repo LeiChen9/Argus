@@ -22,7 +22,7 @@ Practice→ S5 Career 级面试 playbook + job 级 delta
 
 | 类别 | 产物 | 语义 |
 | --- | --- | --- |
-| **事实源** | `backend/persona.json` | 不可删，只增。每条经历带 `source`（上传 / 追问） |
+| **事实源** | `data/persona.json` | 不可删，只增。每条经历带 `source`（上传 / 追问） |
 | **岗位侧** | `data/careers.json` | 与人无关。Career 定义 + `job_id → career` 映射 |
 | **用户的文件** | `data/resumes/{career}.json` | 6 个 Career 各一份底稿（逐字拷 persona 去掉求职意向），
   **用户亲手改**。改过之后删掉就是删掉他的劳动，别当缓存清。 |

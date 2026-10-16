@@ -1,19 +1,18 @@
 """Jobs 领域：搜索结果持久化与查询。
 
-单文件 data/jobs.json（已 gitignore）：jobs 按 id 去重合并、新批次覆盖旧值，
+单文件 data/boss_jobs.json（已 gitignore）：jobs 按 id 去重合并、新批次覆盖旧值，
 batches 追加记录每次采集的关键词、来源与意向快照。
+
+HTTP 层不在这里：Worker 侧只读 API 在 api_read.py（入口路由表在
+entrypoint_worker.py），本模块只留领域函数。job_gaps 已退役，相关读取不再提供。
 """
 
 import json
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
-
 from persona import TARGET_KEYS, get_persona
-from utils import save_file
-
-router = APIRouter()
+from utils import load_file, save_file
 
 STORE = Path(__file__).resolve().parents[1] / "data" / "boss_jobs.json"
 GAPS = Path(__file__).resolve().parents[1] / "data" / "job_gaps.json"
@@ -25,9 +24,8 @@ def _now() -> str:
 
 
 def _load() -> dict:
-    if STORE.exists():
-        return json.loads(STORE.read_text(encoding="utf-8"))
-    return {"updated_at": "", "batches": [], "jobs": {}}
+    """读快照。Worker 模式 load_file 命中 store，离线读本地文件。"""
+    return load_file(STORE) or {"updated_at": "", "batches": [], "jobs": {}}
 
 
 def normalize(raw: dict, source: str) -> dict:
@@ -68,11 +66,38 @@ def save_snapshot(cards: list[dict], keyword: str) -> None:
     save_file(STORE, store)
 
 
+def job_cards() -> dict:
+    """Jobs 页数据：updated_at + 全部岗位卡片。"""
+    store = _load()
+    return {"updated_at": store["updated_at"], "jobs": list(store["jobs"].values())}
+
+
+def career_documents() -> dict:
+    """Career 页数据：careers.json 逐成员回填 boss_jobs 的完整岗位。
+
+    成员只有 job_id/company/title，缺 salary 与 location，画不出卡片：按 id 回填，
+    页面拿到即可渲染。快照里消失的成员回落到 Career 内的 company/title 与
+    belongs_note，不报错——Career 定义是人可编辑的地基，不该被快照漂移带着走。
+    """
+    doc = load_file(CAREERS)
+    if not doc:
+        return {"careers": []}
+    jobs = _load()["jobs"]
+    return {
+        **doc,
+        "careers": [
+            {**f, "jobs": [{**j, **jobs.get(j["job_id"], {}), "id": j["job_id"]}
+                           for j in f.get("jobs", [])]}
+            for f in doc.get("careers", [])
+        ],
+    }
+
+
 def gaps_by_job() -> dict:
     """{job_id: {"generated_at", "model", "analysis"}}
 
-    data/job_gaps.json 的归一化视图。给 tools.py 的 read_job_gap 工具和
-    本文件的 /api/jobs/{id}/analysis 路由共用。
+    data/job_gaps.json 的归一化视图。job_gaps 已退役：离线脚本 cluster_jobs.py 停用，
+    Worker 侧不再提供它的读取入口。函数留着，重启这条线时不用重写。
     """
     if not GAPS.exists():
         return {}
@@ -94,42 +119,4 @@ def gaps_by_job() -> dict:
             "target": target,
         }
         for r in doc.get("results", [])
-    }
-
-
-@router.get("/api/jobs")
-def list_jobs() -> dict:
-    store = _load()
-    return {"updated_at": store["updated_at"], "jobs": list(store["jobs"].values())}
-
-
-@router.get("/api/jobs/{job_id}/analysis")
-def job_analysis(job_id: str) -> dict:
-    """单个岗位的 cluster 解读。analysis 原样透传，不在这里补字段：
-    这一批 LLM 输出的键并不齐（openning/opening、defensive_script 三种变体、
-    部分 gap_details 只有 has_gap），归一化放前端读时兜底，重跑就能自愈。"""
-    row = gaps_by_job().get(job_id)
-    if not row:
-        raise HTTPException(404, "该岗位暂无 AI 解读")
-    return {"job_id": job_id, **row}
-
-
-@router.get("/api/careers")
-def list_careers() -> dict:
-    """Career（S1 产物）。成员只有 job_id/company/title，缺 salary 与
-    location，画不出卡片：按 id 回填 boss_jobs 的完整岗位，页面拿到即可
-    渲染。快照里消失的成员回落到 Career 内的 company/title 与 belongs_note，
-    不报错——Career 定义是人可编辑的地基，不该被快照漂移带着走。
-    """
-    if not CAREERS.exists():
-        return {"careers": []}
-    doc = json.loads(CAREERS.read_text(encoding="utf-8"))
-    jobs = _load()["jobs"]
-    return {
-        **doc,
-        "careers": [
-            {**f, "jobs": [{**j, **jobs.get(j["job_id"], {}), "id": j["job_id"]}
-                           for j in f.get("jobs", [])]}
-            for f in doc.get("careers", [])
-        ],
     }

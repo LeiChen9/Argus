@@ -1,0 +1,21 @@
+{
+  "name": "argus-web",
+  "main": "backend/entrypoint_worker.py",
+  "compatibility_date": "2026-10-16",
+  "compatibility_flags": ["python_workers"],
+
+  // 前端随 Worker 一起发，和 /api 同源，不需要 CORS。目录只指 backend/static：
+  // 指向仓库根会把 .env、data/、persona.json 一起传上去。
+  // SPA 回退：未命中的非 /api 路径都回 index.html（前端是 hash 路由）。
+  "assets": {
+    "directory": "./backend/static",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+
+  // 线上数据面：离线管线在本机跑、产物推 R2，Worker 只读（+ chat/resume/persona 的写）。
+  // bucket 私有，不开公开 URL——与 Drift 的浏览器直连公开 R2 不同，这里一律经 Worker。
+  "r2_buckets": [
+    { "binding": "DATA", "bucket_name": "argus-data" }
+  ]
+}

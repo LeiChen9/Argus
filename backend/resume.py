@@ -19,9 +19,9 @@ import json
 import time
 from pathlib import Path
 
-from common import GEMINI_MODEL, ask_json
+from common import GEMINI_MODEL, ask_json_async
 from persona import get_persona
-from utils import apply_patch, load_file, save_file
+from utils import apply_patch, list_store_keys, load_file, save_file_async
 
 ROOT = Path(__file__).resolve().parents[1]
 CAREERS = ROOT / "data" / "careers.json"
@@ -57,7 +57,7 @@ DIRECTIVE = """## 当前任务：为「{career}」准备一份简历
 **不要自己评价简历写得好不好**——判断权在筛的那步。你要做的是问出他还没说的东西。"""
 
 
-def copy_from_persona(career_id: str) -> dict:
+async def copy_from_persona(career_id: str) -> dict:
     """底稿：persona 去掉求职意向，原样落盘。**不调 LLM、不动一个字。**
 
     简历不是生成出来的，是他那份履历去掉求职意向——本来就该先有一份。后面每一次
@@ -67,7 +67,7 @@ def copy_from_persona(career_id: str) -> dict:
     if not persona.get("work_history"):
         raise ValueError("还没有 persona，先让他传一份简历")
     career = {c["career_id"]: c for c in load_file(CAREERS)["careers"]}[career_id]
-    return save_file(RESUME_DIR / f"{career_id}.json", {
+    return await save_file_async(RESUME_DIR / f"{career_id}.json", {
         "career_id": career_id,
         "career_name": career["name"],
         "updated_at": time.strftime("%Y-%m-%d %H:%M"),
@@ -75,12 +75,15 @@ def copy_from_persona(career_id: str) -> dict:
     })
 
 
-def apply_edits(career_id: str, ops: list, reason: str) -> dict:
+async def apply_edits(career_id: str, ops: list, reason: str) -> dict:
     """改简历正文的唯一入口：只动点名的条目，改完记一笔。筛出来的报告不碰。
 
-    **唯一的调用方是用户在 Resume 页的手改**（chat.py 的 POST /api/resumes/*/edits）：
+    **唯一的调用方是用户在 Resume 页的手改**（Worker 侧 api_write.py）：
     前端表单天生知道「用户改的是 /work_history/0/projects/1/description」，把字段换算成
     ops 发过来，这里照单落盘。LLM 那三个写工具摘掉之后，AI 不再碰这个文件。
+
+    load→patch→save 是读改写：单用户下同 sid 串行，竞争不可达；真有多端
+    并发那天，上 R2 的条件写（etag）而不是在这里加锁。
     """
     path = RESUME_DIR / f"{career_id}.json"
     saved = load_file(path)
@@ -97,7 +100,19 @@ def apply_edits(career_id: str, ops: list, reason: str) -> dict:
     patched["edits"] = [*saved["resume"].get("edits", []), {
         "at": time.strftime("%Y-%m-%d %H:%M"), "reason": reason, "applied": applied,
     }]
-    return save_file(path, {**saved, "updated_at": time.strftime("%Y-%m-%d %H:%M"), "resume": patched})
+    return await save_file_async(path, {**saved, "updated_at": time.strftime("%Y-%m-%d %H:%M"), "resume": patched})
+
+
+def resume_paths() -> list[Path]:
+    """简历文件清单。Worker 无文件系统，glob 换成 store key 枚举；离线仍 glob。
+
+    两条路都只回「哪些 career 有简历」。Worker 侧 set 非空即 Worker 模式；
+    store 空（离线）时不拦，直接走 glob，行为与从前一致。
+    """
+    keys = list_store_keys("resumes/")
+    if keys:
+        return [RESUME_DIR / Path(k).name for k in sorted(keys)]
+    return sorted(RESUME_DIR.glob("*.json")) if RESUME_DIR.exists() else []
 
 
 def list_resumes() -> list[dict]:
@@ -108,7 +123,7 @@ def list_resumes() -> list[dict]:
     一并带上，Career 页的软链要显示它们。
     """
     out = []
-    for path in sorted(RESUME_DIR.glob("*.json")) if RESUME_DIR.exists() else []:
+    for path in resume_paths():
         doc = load_file(path)
         review = doc.get("review") or {}
         out.append({k: doc.get(k, "") for k in ("career_id", "career_name", "updated_at")}
@@ -118,7 +133,7 @@ def list_resumes() -> list[dict]:
     return out
 
 
-def ensure_all() -> list[dict]:
+async def ensure_all() -> list[dict]:
     """补齐每个 Career 的底稿，再返回索引。
 
     简历不是「谈到了才建」的东西——每个 Career 都有一份，用户在 Resume 页挑一份去改。
@@ -127,11 +142,13 @@ def ensure_all() -> list[dict]:
 
     persona 还没有（他没上传过简历）时只返回已有的，不补——补出来是空壳。
     """
-    careers = load_file(CAREERS)["careers"] if CAREERS.exists() else []
+    # load_file 而非 CAREERS.exists()：Worker 的文件不存在性检查永远为假，
+    # exists() 会让 ensure_all 静默返回空列表。同样理由，逐份存在性也查 load_file。
+    careers = (load_file(CAREERS) or {}).get("careers", [])
     if get_persona().get("work_history"):
         for career in careers:
-            if not (RESUME_DIR / f"{career['career_id']}.json").exists():
-                copy_from_persona(career["career_id"])
+            if not load_file(RESUME_DIR / f"{career['career_id']}.json"):
+                await copy_from_persona(career["career_id"])
     return list_resumes()
 
 
@@ -162,13 +179,13 @@ def body(saved: dict) -> str:
                       ensure_ascii=False, indent=2)
 
 
-def critique(career_id: str) -> dict:
+async def critique(career_id: str) -> dict:
     """筛简历。输入只有「职能要求 + 简历成品」，没有原始履历。"""
     path = RESUME_DIR / f"{career_id}.json"
     saved = load_file(path)
     career = {c["career_id"]: c for c in load_file(CAREERS)["careers"]}[career_id]
 
-    report = ask_json("""你在筛简历。
+    report = await ask_json_async("""你在筛简历。
 
 候选人投的那个职能，就是你手上「职能要求」里这个。你有两样东西：它的能力要求（这就是
 你的口味），以及候选人的简历。**你没有他的原始履历，也不需要。**
@@ -213,5 +230,5 @@ def critique(career_id: str) -> dict:
     latest = {"at": now, **{k: report.get(k, "") for k in
                             ("verdict", "first_screen", "fixable", "needs_mining", "one_line")}}
     # 历次筛选留档：改完再看一次，结论有没有变，是唯一能判断改得有没有用的证据。
-    return save_file(path, {**saved, "review": {"model": MODEL, **latest,
+    return await save_file_async(path, {**saved, "review": {"model": MODEL, **latest,
         "history": [*(saved.get("review") or {}).get("history", []), latest]}})

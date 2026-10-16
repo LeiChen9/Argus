@@ -219,8 +219,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Argus: persona runtime store (memory singleton spillover, gitignored)
-backend/persona.json
+# Argus: persona runtime store 已归位 data/persona.json（被上面的 data/* 覆盖）
 
 # Argus: 本地数据与生成报告只落盘不入库（README 例外，用于声明生产者）
 data/*
@@ -233,4 +232,14 @@ nohup.out
 # Argus: 手工备份，只落盘不入库
 backup/
 /data/boss_jobs.json
-worker-proxy/.wrangler/
+
+# Argus: 仓库根的 Worker（argus-web）本地状态与密钥。密钥含 access code 与 LLM key，
+# 进了仓库等于把六家 LLM 的调用权公开。线上密钥走 wrangler secret，不靠 .dev.vars。
+/.wrangler/
+.dev.vars
+
+# Argus: python_modules/ 是 workers-py SDK 与应用依赖的 vendor 目标，不入库。
+# 换机器或 CI 重建：uv pip install --target python_modules --python <py3.11+>
+#   workers-py workers-runtime-sdk chinese-calendar markdown-it-py
+# 不用 requirements.txt：远端运行时会把 site-packages 的 workers shim 盖回去。
+python_modules/

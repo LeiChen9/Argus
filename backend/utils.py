@@ -12,12 +12,92 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from functools import wraps
 from pathlib import Path
 
+_HERE = Path(__file__).resolve().parent
+_DATA = _HERE.parent / "data"
+
+
+# ── R2 只读缓存（Worker 模式）────────────────────────────────────────────
+#
+# Worker 没有文件系统：entrypoint_worker._refresh 每个数据请求前从 R2 并行拉
+# 全量文本灌进这里，load_file 优先查缓存，未命中退回本地文件。离线脚本从不
+# 灌缓存，逐字节走老路。
+#
+# 缓存的是 text 不是 dict：领域函数照旧自己 json.loads，读哪份、读几次仍是
+# 领域自己的事，缓存层不插足。（解析亚毫秒，已实测。）
+_store: dict[str, str] = {}
+
+
+def bind_store(texts: dict[str, str]) -> None:
+    """整罐替换 store。Worker 每请求刷新时调；离线模式不调用。"""
+    _store.clear()
+    _store.update(texts)
+
+
+def put_store(key: str, text: str) -> None:
+    """写后把内容同步进 store：同请求内的后续读取要看得见刚写的东西。
+
+    ensure_all 建档后当场列列表就靠这个——store 是请求开始时灌的快照，
+    不补这一笔，刚建的底稿在本请求里不存在。
+    """
+    _store[key] = text
+
+
+def store_active() -> bool:
+    """是否 Worker 模式（store 被灌过）。领域模块据此切换双模式行为，
+    典型是 persona 的单例：Worker 的 isolate 跨请求复用，单例会吐旧数据。"""
+    return bool(_store)
+
+
+def list_store_keys(prefix: str) -> list[str]:
+    """store 里某前缀下的 key 列表——Worker 侧替代 glob（没有目录可扫）。"""
+    return [k for k in _store if k.startswith(prefix)]
+
+
+def _store_key(path: Path) -> str | None:
+    """本地路径 → R2 key。data/ 下的路径原样映射（persona.json 也在 data/）。
+    其余路径（报告、临时文件）不归 R2 管，永远走本地。"""
+    p = Path(path).resolve()
+    if p.is_relative_to(_DATA):
+        return p.relative_to(_DATA).as_posix()
+    return None
+
+
+# ── 写通道（Worker 模式）───────────────────────────────────────────────
+#
+# save_file 是同步的（离线脚本直接调），Worker 写 R2 必须 await。领域侧凡是
+# 落盘的函数统一改 async + await save_file_async；离线路径 _writer 未注入，
+# 原地退回 save_file，行为不变。
+_writer = None
+
+
+def bind_writer(writer) -> None:
+    """entrypoint 注入：async fn(key, text) -> None。注入后 save_file_async 走 R2。"""
+    global _writer
+    _writer = writer
+
+
+async def save_file_async(path: Path, payload: dict) -> dict:
+    """领域写入口。Worker 落 R2，离线落本地文件。"""
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    if _writer is not None:
+        key = _store_key(path)
+        if key is None:
+            raise RuntimeError(f"R2 没有 {path} 对应的 key（只认 data/ 与 persona.json）")
+        await _writer(key, text)
+        put_store(key, text)
+        return payload
+    return save_file(path, payload)
+
 
 def load_file(path: Path) -> dict | None:
+    key = _store_key(path)
+    if key is not None and key in _store:
+        return json.loads(_store[key])
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
@@ -86,7 +166,18 @@ def tool(fn):
     没有它的话，每个工具都得自己 try 一遍自己会抛的那几种异常；而 LLM 只认得 tool
     result 里的 status 字段——异常直接抛出去会变成 502，模型看不到「path 打错了」
     这句话，也就学不会下次打对。
+
+    async 分支：调 LLM 的工具是协程函数，异常要到 await 时才抛，同步外壳接不住。
     """
+    if inspect.iscoroutinefunction(fn):
+        @wraps(fn)
+        async def awrapped(*args, **kwargs) -> dict:
+            try:
+                return await fn(*args, **kwargs)
+            except Exception as e:
+                return {"status": "error", "detail": str(e)}
+        return awrapped
+
     @wraps(fn)
     def wrapped(*args, **kwargs) -> dict:
         try:

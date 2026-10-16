@@ -7,6 +7,10 @@
   - 每个 Career 的定位与归属判据
   - job_id → career_id 的映射（必须落盘，见 workflow.md §2 S1）
 
+**Career 上限 MAX_CAREERS 个，允许丢弃归不进任何 Career 的岗位。**
+理由（2026-10-16 定）：招聘平台只让留 3 份简历，Career 超过 3 个用户也看不过来；
+宁可少而内聚，不要多而互相污染。
+
 输出 data/careers.json 是**人可编辑的产物**：Career 边界一重跑就漂，所以
 「切边界」与「补能力」分成两步——本脚本只切边界，capabilities 字段整个
 不出现，由 scripts/extract_capabilities.py 逐个 Career 另跑一次补齐。那次调用
@@ -31,6 +35,9 @@ JOBS_PATH = ROOT / "data" / "boss_jobs.json"
 OUT_JSON = ROOT / "data" / "careers.json"
 
 JD_MAX_CHARS = 1200
+
+# Career 数量上限。见模块 docstring：3 份简历的平台限制 + 用户的注意力预算。
+MAX_CAREERS = 3
 
 
 def build_job_block(job: dict) -> str:
@@ -68,10 +75,11 @@ CLUSTER_PROMPT = """
 2. **不按行业切。** 同一个真实职能（如经营分析）在游戏、电商、本地生活里都成立，
    应归入同一 Career。反过来，行业相同但职能不同（电商供应链的商业分析 vs 电商BI
    工程师）不得归入同一 Career。
-3. **Career 数服从内聚性，不预设目标数量。** 要求定义清晰，不互相重叠。
-   若某个岗位与所有已有 Career 都不匹配，则**新建一个**，不要硬塞进最像的那个。
-   避免定义被污染。**只有一个岗位的 Career 也是合法的**——与其把
-   一个边缘岗位塞进错误的 Career、污染那个 Career 的能力定义，宁可单开一个。
+3. **Career 数量上限 3 个，宁少勿滥。** 内聚性优先于覆盖率：先把职责与
+   能力要求最一致的两三类岗位归拢，定义要清晰、不互相重叠。**允许丢弃
+   一部分归不进任何 Career 的岗位**——不进 careers.json，也不报错。不得
+   为了凑数新建第 4 个 Career，也不得把边缘岗位塞进最像的那个 Career、
+   污染它的能力定义。
 </Principles>
 
 <Workflow>
@@ -80,8 +88,9 @@ CLUSTER_PROMPT = """
    title 复核，而不是反过来。
 2. 通读全部推断结果，按「职责与能力要求是否一致」归拢岗位。
 3. 为每个 Career 确定 name（职能名，不带行业前缀）、positioning、membership_criteria。
-4. 把每个岗位放进**它所属那个 Career** 的 jobs。**每个岗位必须恰好出现一次，
-   不允许遗漏，也不允许重复。**
+4. 把每个岗位放进它所属的那个 Career 的 jobs。**每个岗位至多出现一次；
+   归不进任何现有 Career 的岗位直接丢弃**——不要新建超过 3 个的 Career，
+   也不要硬塞进去。
 </Workflow>
 
 <Output_Constraint>
@@ -105,6 +114,8 @@ CLUSTER_PROMPT = """
     }
   ]
 }
+careers 数组最多 3 项。未被任何 Career 收录的岗位即为丢弃，不需要在输出中
+另行列出。
 </Output_Constraint>
 """
 
@@ -138,21 +149,24 @@ def build_assignment(result: dict) -> dict[str, str]:
 
 
 def verify(result: dict, jobs: list[dict]) -> None:
-    """校验每个输入岗位都恰好归入一个 Career。
+    """校验：career 数 ≤ MAX_CAREERS；每个岗位至多归入一个 Career。
 
-    对不上就不能落盘：漏掉的岗位会在下游静默消失——S2 不会分析它，
-    页面上也不显示，却没有任何地方报错。
+    不要求全覆盖——上限 3 个时边缘岗位允许丢弃（CLUSTER_PROMPT Principle 3），
+    抓丢的岗位会在 main 里打印出来给人看。要防的是另一种静默错误：同一岗位
+    重复出现两次，会让它在两个 Career 里都被当成成员。
     """
+    careers = result.get("careers") or []
+    if len(careers) > MAX_CAREERS:
+        raise RuntimeError(f"career 数 {len(careers)} 超过上限 {MAX_CAREERS}")
     ids = [
         j.get("job_id")
-        for f in result.get("careers") or []
+        for f in careers
         for j in f.get("jobs") or []
     ]
-    expected = {j["id"] for j in jobs}
-    if set(ids) != expected or len(ids) != len(expected):
+    unknown = set(ids) - {j["id"] for j in jobs}
+    if unknown or len(ids) != len(set(ids)):
         raise RuntimeError(
-            f"job_id 对不上：输入 {len(expected)} 个，"
-            f"收到 {len(ids)} 个（其中唯一 {len(set(ids))} 个）"
+            f"job_id 对不上：未知 {sorted(unknown)}，重复 {len(ids) - len(set(ids))} 个"
         )
 
 
@@ -179,6 +193,8 @@ def main() -> None:
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
+    kept = {j["job_id"] for f in result["careers"] for j in f.get("jobs") or []}
+    dropped = [j["id"] for j in jobs if j["id"] not in kept]
     print(
         f"耗时 {time.perf_counter() - t0:.1f}s · {msg['model']} → {OUT_JSON.name}\n"
         + "\n".join(
@@ -186,6 +202,7 @@ def main() -> None:
             f"{len(f.get('jobs') or [])} 个岗位"
             for f in result["careers"]
         )
+        + (f"\n丢弃 {len(dropped)} 个岗位: {', '.join(dropped)}" if dropped else "\n无丢弃岗位")
     )
 
 

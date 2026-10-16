@@ -4,7 +4,12 @@ from pathlib import Path
 
 import httpx
 import time
-from common import SCRAPER_API_KEY, call_llm, clean_llm_json
+from common import call_llm, clean_llm_json, read_env_key
+
+# 只归离线：本模块只被 tools.search_jobs 引用（已停用未注册），绝不进 Worker。
+# key 在模块级读——与从前 common.py 里的时机一致，缺 .env 时 import 即报错，
+# 而不是等到真去抓的时候才炸。
+SCRAPER_API_KEY = read_env_key("scraper_apiKey")
 
 BOSS_VENDOR_SCRIPTS = Path(__file__).resolve().parent.parent / "vendor" / "boss-zhipin-scraper" / "scripts"
 BOSS_CDP_PORT = 9222

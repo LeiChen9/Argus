@@ -1,8 +1,10 @@
 """Persona 领域：开发、评估和维护 Persona 相关内容。
 
-- get/save_persona: 内存单例 + 落 persona.json（被 gitignore），B 片再迁 SQLite
-- read_upload: 简历 md/txt 校验 + 读文本（限 200KB）
-- parse_resume_llm: 调智谱抽取，失败抛错不降级
+- get_persona: Worker 每次直读 store，离线走内存单例
+- save_persona/save_targets: async，Worker 落 R2（persona.json），离线落本地
+- read_upload: 简历 md/txt 校验 + 读文本（限 200KB）。签名是 (name, bytes)，
+  FastAPI 的 UploadFile 和 Worker 的 FormData File 都能喂
+- parse_resume_llm: 调 Gemini 抽取（pinned），失败降级到链上其余模型
 - init_persona_from_text: 从简历文本建 Persona 并落盘
 
 没有数据模型。内部就是一个 dict，原样落 persona.json，字段约定只写在
@@ -16,10 +18,8 @@ import logging
 import time
 from pathlib import Path
 
-from fastapi import UploadFile
-
-from common import GEMINI_MODEL, clean_llm_json, llm_client
-from utils import load_file, save_file
+from common import GEMINI_MODEL, call_llm_async, clean_llm_json
+from utils import load_file, save_file_async, store_active
 
 logger = logging.getLogger("argus.persona")
 
@@ -66,7 +66,7 @@ RESUME_TO_PERSONA = """分析简历，抽取结构化信息。只输出 JSON，�
 def build_resume_prompt(resume_text: str) -> str:
     return RESUME_TO_PERSONA.format(resume=resume_text)
 
-STORE_PATH = Path(__file__).resolve().parent / "persona.json"
+STORE_PATH = Path(__file__).resolve().parents[1] / "data" / "persona.json"
 
 MAX_BYTES = 200 * 1024
 ALLOWED_SUFFIX = {".md", ".txt"}
@@ -78,8 +78,14 @@ _persona: dict | None = None
 
 
 def get_persona() -> dict:
-    """内存单例，没有就从 persona.json 恢复，再没有就返回空 dict。"""
+    """内存单例，没有就从 persona.json 恢复，再没有就返回空 dict。
+
+    Worker 模式不走单例：isolate 会被后续请求复用，单例会让刚上传/改过的
+    persona 在这批请求里继续吐旧值。store 非空即 Worker 模式，每次直读。
+    """
     global _persona
+    if store_active():
+        return load_file(STORE_PATH) or {}
     if _persona is not None:
         return _persona
     if STORE_PATH.exists():
@@ -89,7 +95,7 @@ def get_persona() -> dict:
     return _persona
 
 
-def save_targets(
+async def save_targets(
     target: list[str],
     target_base: str,
     target_salary: str,
@@ -103,65 +109,64 @@ def save_targets(
     data["target"] = target
     data["target_base"] = target_base
     data["target_salary"] = target_salary
-    return save_persona(data)
+    return await save_persona(data)
 
 
-def save_persona(data: dict) -> dict:
-    """更新内存单例并落盘。返回存入的数据本身，方便链式。"""
+async def save_persona(data: dict) -> dict:
+    """落盘并返回存入的数据。Worker 落 R2，离线落本地 + 内存单例。"""
     global _persona
     _persona = data
-    save_file(STORE_PATH, data)
+    await save_file_async(STORE_PATH, data)
     return data
 
 
-async def read_upload(file: UploadFile) -> str:
-    """校验后缀并读文本。只收 .md / .txt，超 200KB 拒收。"""
-    suffix = Path(file.filename or "").suffix.lower()
+def read_upload(name: str, raw: bytes) -> str:
+    """校验后缀并读文本。只收 .md / .txt，超 200KB 拒收。
+
+    签名收 (文件名, 字节)：FastAPI 侧 UploadFile 拆开喂，Worker 侧 FormData
+    的 File.text() 转 bytes 喂——两边的读取机制不同，校验逻辑只有一份。
+    """
+    suffix = Path(name or "").suffix.lower()
     if suffix not in ALLOWED_SUFFIX:
         raise ValueError(f"只收 md/txt，收到 {suffix or '无后缀'}")
-    raw = await file.read()
     if len(raw) > MAX_BYTES:
         raise ValueError(f"文件过大（{len(raw)}B），上限 {MAX_BYTES}B")
     return raw.decode("utf-8", errors="replace")
 
 
-def parse_resume_llm(text: str) -> dict:
-    """调 Gemini 抽取。失败抛错（由 chat.py 转 502），不降级。返回 LLM 给的原样 JSON。"""
+async def parse_resume_llm(text: str) -> dict:
+    """调 Gemini 抽取。pinned 钉链首；失败降级到链上其余模型（比从前的直接
+    502 稳——抽取是结构化 JSON，弱模型还有 clean_llm_json 兜底修复）。"""
     logger.info("parse_resume_llm: start, resume_len=%d", len(text))
     body = text.strip()
     if not body:
         logger.info("parse_resume_llm: empty resume, return {}")
         return {}
     t0 = time.perf_counter()
-    resp = llm_client().chat.completions.create(
-        model=GEMINI_MODEL,
-        messages=[{"role": "user", "content": build_resume_prompt(body)}],
+    msg = await call_llm_async(
+        [{"role": "user", "content": build_resume_prompt(body)}],
         temperature=0.1,
+        pinned=GEMINI_MODEL,
+        # 4096 够装一份完整履历的结构化 JSON；不收 8192——弱模型会 rampble。
+        max_tokens=4096,
     )
-    data = clean_llm_json(resp.choices[0].message.content)
-
-    latency_ms = (time.perf_counter() - t0) * 1000
-    usage = resp.usage
+    data = clean_llm_json(msg["content"])
     logger.info(
-        "parse_resume_llm: success keys=%s tokens_in=%d tokens_out=%d total_tokens=%d latency_ms=%.0f",
-        sorted(data),
-        usage.prompt_tokens,
-        usage.completion_tokens,
-        usage.total_tokens,
-        latency_ms,
+        "parse_resume_llm: success keys=%s model=%s latency_ms=%.0f",
+        sorted(data), msg["model"], (time.perf_counter() - t0) * 1000,
     )
     return data
 
 
-def init_persona_from_text(text: str) -> dict:
-    """从简历文本调 LLM 建 Persona 并落盘。失败抛错，不降级。
+async def init_persona_from_text(text: str) -> dict:
+    """从简历文本调 LLM 建 Persona 并落盘。失败抛错，由 HTTP 层转 502。
 
     聊出来的求职意向不丢：简历抽取只给简历里有的字段，
-    target / target_base / target_salary 沿用聊天里已存的。
+    target / target_base / target_salary 沿用已存的。
     """
-    data = parse_resume_llm(text)
+    data = await parse_resume_llm(text)
     current = get_persona()
     for key in TARGET_KEYS:
         if key in current:
             data[key] = current[key]
-    return save_persona(data)
+    return await save_persona(data)

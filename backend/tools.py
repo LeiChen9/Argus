@@ -4,38 +4,39 @@
 函数，实现全在这里——它们的服务对象是模型调用，不是某个 HTTP 路由。
 chat.py 决定「有哪些工具、怎么注册」，tools.py 决定「工具被调用时干什么」。
 
-- 四个只读工具：直接读 data/ 下的文件，不经 jobs.py 的路由函数
+- 两个只读工具：直接读 data/ 下的文件，不经 jobs.py 的路由函数
 - 简历三个工具：建 / 读 / 评，见 resume.py。**没有写简历的工具**——他自己改；
   @tool 外壳统一收异常
-- search_jobs：搜岗位，唯一会写 data/ 事实源的暂用工具，暂时停用没注册，实现留着
-- auto_compact：会话内存的 token 阈值压缩，由 /api/chat 在发请求前调，
+- auto_compact：会话内存的 token 阈值压缩，由 chat 在发请求前调，
   **不进 TOOLS**——压缩若是模型可选行为，模型不调就不压，阈值形同虚设
 
+调 LLM 的工具（analyze_jd）是 async 的：Worker 侧只有 fetch 传输（openai SDK
+进不了 pyodide），见 common.call_llm_async。@tool 外壳有对应的 async 分支。
+
 data/ 是事实源，工具只读不写。新增工具在此实现，再到 chat.py 注册。
+job_gaps 已退役：read_job_gaps / read_job_gap / search_jobs（crawler 链路）
+随数据面一起下线，crawler.py 只归离线。
 """
 
 import json
 import logging
 
-from common import call_llm, clean_llm_json, _input_tokens
+from common import call_llm_async, clean_llm_json, _input_tokens
 from persona import get_persona
-from jobs import gaps_by_job, normalize, save_snapshot, CAREERS, GAPS
-# 领域侧叫 copy_from_persona / critique，工具侧带 resume 后缀。两边不同名，
-# 工具函数体里调领域函数时才不会被自己遮住。
 from resume import (
     CAREERS,
     RESUME_DIR,
     body as resume_body,
     copy_from_persona,
     critique,
+    resume_paths,
 )
 from utils import load_file, tool
-from crawler import fetch_liepin_html, parse_jobs, fetch_boss_recommendations, fetch_boss_details
 
 logger = logging.getLogger("argus.tools")
 
 
-# ── 四个只读工具 ─────────────────────────────────────────────────────────
+# ── 两个只读工具 ─────────────────────────────────────────────────────────
 
 
 @tool
@@ -55,43 +56,10 @@ def read_persona() -> dict:
 def read_careers() -> dict:
     """Career 全量：定位、归属判据、能力清单、成员岗位。6 个 Career 一次读完，
     模型才能横向比较。只回 careers 数组，generated_at 之类的元信息对回答没用。"""
-    if not CAREERS.exists():
+    doc = load_file(CAREERS)
+    if not doc:
         return {"status": "error", "detail": "还没有 careers.json"}
-    doc = json.loads(CAREERS.read_text(encoding="utf-8"))
     return {"status": "ok", "careers": doc.get("careers", [])}
-
-
-@tool
-def read_gaps_index() -> dict:
-    """岗位 × persona 差距解读的索引。全量 438KB 读不动，先只给
-    公司/岗位/薪资/地点，模型挑中哪个再用 job_id 读单条全文。"""
-    if not GAPS.exists():
-        return {"status": "error", "detail": "还没有 job_gaps.json"}
-    doc = json.loads(GAPS.read_text(encoding="utf-8"))
-    return {
-        "status": "ok",
-        "generated_at": doc.get("generated_at", ""),
-        "jobs": [
-            {
-                "job_id": j["job"]["id"],
-                "title": j["job"].get("title", ""),
-                "company": j["job"].get("company", ""),
-                "salary": j["job"].get("salary", ""),
-                "location": j["job"].get("location", ""),
-            }
-            for j in doc.get("results", [])
-        ],
-    }
-
-
-@tool
-def read_gap(job_id: str) -> dict:
-    """单个岗位的完整解读：每条要求与 persona 的匹配状态、缺什么、简历里的证据。
-    带上跑分析时的求职意向快照——不然模型无从判断「对齐」是对齐到什么。"""
-    row = gaps_by_job().get(job_id)
-    if not row:
-        return {"status": "error", "detail": f"没有 {job_id} 的解读"}
-    return {"status": "ok", **row}
 
 
 # ── JD 匹配 ───────────────────────────────────────────────────────────────
@@ -126,12 +94,12 @@ ANALYZE_JD_PROMPT = """
 
 
 @tool
-def analyze_jd(jd: str) -> dict:
-    """用户贴一份 JD 时调它：从 data/resumes 现有简历里挑最合适的一份，并给一段招聘平台开场白。"""
+async def analyze_jd(jd: str) -> dict:
+    """用户贴一份 JD 时调它：从 data/resumes 现有简历里挑出最合适的一份，并给一段招聘平台开场白。"""
     jd = (jd or "").strip()
     if not jd:
         return {"status": "error", "detail": "JD 为空"}
-    docs = [d for p in sorted(RESUME_DIR.glob("*.json")) if (d := load_file(p))] if RESUME_DIR.exists() else []
+    docs = [d for p in resume_paths() if (d := load_file(p))]
     if docs:
         material = "\n\n".join(
             f'<简历 career="{d.get("career_name", d.get("career_id", ""))}">\n{resume_body(d)}\n</简历>'
@@ -140,11 +108,13 @@ def analyze_jd(jd: str) -> dict:
         # 一份简历都没建过时退回 persona 初稿，至少还能判断。
         material = f"<Candidate_Persona>\n{json.dumps(get_persona(), ensure_ascii=False, indent=2)}\n</Candidate_Persona>"
     material += f"\n\n<Target_JD>\n{jd[:JD_MAX_CHARS]}\n</Target_JD>"
-    msg = call_llm(
+    # 1024 而不是 8192：输出是定长 JSON（best_resume/rationale/openning 三项），
+    # 给免费小模型 8192 它会 rampble——实测单轮 73 秒（见 chat.py::answer 同款注释）。
+    msg = await call_llm_async(
         [{"role": "user", "content": ANALYZE_JD_PROMPT},
          {"role": "user", "content": material}],
         temperature=0.1,
-        max_tokens=8192,
+        max_tokens=1024,
     )
     return {"status": "ok", **clean_llm_json(msg["content"])}
 
@@ -158,7 +128,7 @@ def analyze_jd(jd: str) -> dict:
 
 
 @tool
-def start_resume(career_id: str) -> dict:
+async def start_resume(career_id: str) -> dict:
     """切到「为这个职能准备简历」模式。返回职能要求 + 现有材料的提纲，
     够 agent 立刻开始对着问，不用再回头翻别的文件。"""
     careers = load_file(CAREERS)["careers"]
@@ -183,7 +153,7 @@ def start_resume(career_id: str) -> dict:
     if load_file(RESUME_DIR / f"{career_id}.json"):
         out["简历"] = "已存在，直接读它继续"
     else:
-        copy_from_persona(career_id)
+        await copy_from_persona(career_id)
         out["简历"] = "已按 persona 建好底稿（去掉求职意向）。他不提就别催——改是他自己的事"
     return out
 
@@ -204,7 +174,7 @@ def read_resume(career_id: str) -> dict:
 
 
 @tool
-def critique_resume(career_id: str) -> dict:
+async def critique_resume(career_id: str) -> dict:
     """筛简历。返回筛选结论、可改的地方、以及只能继续挖的缺口。
 
     history 留档但不回喂：全量带进上下文会按筛选次数线性涨，且旧报告里的 path 是
@@ -212,45 +182,9 @@ def critique_resume(career_id: str) -> dict:
 
     报告是**写给他看的建议**，不是待执行的改动——他自己动手改，模型不碰他的文件。
     """
-    review = critique(career_id).get("review", {})
+    review = (await critique(career_id)).get("review", {})
     return {"status": "ok", **{k: v for k, v in review.items() if k != "history"},
             "历次筛选次数": len(review.get("history", []))}
-
-
-# search_boss_jobs 暂时停用：没注册进 chat.TOOLS，实现留着，想开回来把它加进
-# TOOLS 即可。它是唯一会写 data/ 事实源的已注册工具（落 boss_jobs.json 覆盖快照）。
-def search_jobs(keyword: str) -> tuple[dict, list[dict] | None]:
-    try:
-        raws = fetch_boss_recommendations(max_batches=1, timeout=25)
-        source = "boss_recommend"
-    except OSError:
-        raws, source = [], "liepin"
-    if source == "boss_recommend" and raws:
-        details = fetch_boss_details(raws)
-        merged = []
-        for j in raws:
-            key = j.get("encrypt_job_id") or j.get("job_link") or j.get("title")
-            d = details.get(key)
-            if d:
-                j = {**j, "jd": d.get("jd", ""), "skill_tags": d.get("skill_tags", []), "boss_active_status": d.get("boss_active_status", "")}
-                if j["jd"]:
-                    merged.append(j)
-        cards = [normalize(j, source) for j in merged]
-    else:
-        cards = [normalize(j, source) for j in raws]
-    if not cards:
-        source = "liepin"
-        cards = [normalize(j, source) for j in parse_jobs(fetch_liepin_html(keyword))]
-    if not cards:
-        return {"status": "error", "detail": "两个来源都没有结果"}, None
-    save_snapshot(cards, keyword)
-    summary = {
-        "status": "ok",
-        "source": source,
-        "count": len(cards),
-        "preview": [{k: c[k] for k in ("title", "company", "salary")} for c in cards[:5]],
-    }
-    return summary, cards
 
 
 # ── 上下文压缩 ───────────────────────────────────────────────────────────
@@ -279,7 +213,7 @@ COMPACT_PROMPT = """把一段对话压缩成摘要，供同一段对话后续继
 这是压缩产物，不是用户发言。需要原文细节时用工具重新读文件，不要凭摘要猜。"""
 
 
-def _compact(history: list[dict]) -> None:
+async def _compact(history: list[dict]) -> None:
     """历史超阈值时压成一条摘要，原地改写 history。
 
     摘要以 user 身份注入而不是 system：system prompt 只有一份、保持单一事实源，
@@ -293,7 +227,7 @@ def _compact(history: list[dict]) -> None:
     old, recent = history[:-keep], history[-keep:]
     transcript = "\n".join(f"{'用户' if m['role'] == 'user' else 'Argus'}：{m['content']}" for m in old)
     try:
-        msg = call_llm([
+        msg = await call_llm_async([
             {"role": "user", "content": COMPACT_PROMPT},
             {"role": "user", "content": f"<对话记录>\n{transcript}\n</对话记录>"},
         ], max_tokens=8192)
@@ -307,8 +241,8 @@ def _compact(history: list[dict]) -> None:
     history[:] = [{"role": "user", "content": f"<此前对话摘要>\n{summary}\n</此前对话摘要>"}, *recent]
 
 
-def auto_compact(history: list[dict]) -> list[dict]:
+async def auto_compact(history: list[dict]) -> list[dict]:
     """超阈值先压缩，再返回可放进请求的历史。原地改写 history。"""
     if _input_tokens(history, None) > COMPACT_THRESHOLD:
-        _compact(history)
+        await _compact(history)
     return list(history)

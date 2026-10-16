@@ -78,12 +78,16 @@ button { font: inherit; color: inherit; }
 
 .view[hidden] { display: none; }
 
+/* 居中用 margin:auto 而不是 align-items:center。flex 居中在内容比容器高时
+   会从上下两头溢出，而 .view 是 absolute + overflow 可见，溢出的顶部那份会
+   直接盖到顶栏上（Me 页内容最多，所以它最先露馅）。margin:auto 的行为是：
+   有余量就居中，没余量就退化成 0，配合 overflow-y:auto 也不会裁掉顶部。 */
 .view--center {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 28px 28px;
+  overflow-y: auto;
+  padding: 18px 28px 24px;
 }
+.view--center > * { margin: auto; }
 
 .view.is-active {
   animation: viewIn 420ms var(--spring) both;
@@ -245,35 +249,42 @@ button { font: inherit; color: inherit; }
   overflow-y: auto;
 }
 
+/* 一整块，不是一堆小方块：外层是带毛玻璃和描边的容器，五个入口是容器里等分的
+   触区（mac 底栏那种感觉）。容器自己居中并限宽，桌面上不会拉成一条横贯的带。 */
 .homenav {
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
+  align-self: center;
+  width: 100%;
+  max-width: 460px;
   margin-top: auto;   /* 贴内容底部；hero 短的时候也不会飘上去 */
+  padding: 5px;
+  border: 0.5px solid var(--hairline);
+  border-radius: 18px;
+  background: var(--bar-bg);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 0 6px 20px rgba(58, 46, 34, 0.10);
 }
 
 .homenav__item {
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
-  width: calc((100% - 30px) / 5);
-  max-width: 84px;
-  padding: 11px 2px 9px;
-  border: 0.5px solid var(--hairline);
+  gap: 4px;
+  padding: 8px 2px 7px;
+  border: 0;
   border-radius: 14px;
-  background: #fff;
-  box-shadow: 0 1px 4px rgba(58, 46, 34, 0.06);
-  color: var(--ink-2);
+  background: none;
+  color: var(--ink-3);
   font: inherit;
-  font-size: 11.5px;
+  font-size: 11px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.homenav__item:active { transform: scale(0.96); }
-.homenav__item svg { width: 22px; height: 22px; color: var(--accent); }
+.homenav__item:active { background: var(--glow); transform: scale(0.95); }
+.homenav__item svg { width: 23px; height: 23px; }
 
 /* ── Placeholder ── */
 .placeholder { text-align: center; }

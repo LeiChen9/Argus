@@ -68,6 +68,10 @@ def read_careers() -> dict:
 # 那边是批量岗位全量报告，这里只要选简历 + 开场白，故裁到这几个字段。
 
 JD_MAX_CHARS = 1600
+# 低于这个长度不是 JD。线上实测：用户说「你没说完」，模型按工具说明
+# （「JD 原文从用户消息里取」）把这四个字当 JD 传了进来，跑出一份张冠李戴的
+# 匹配。闸门拦在调 LLM 之前——真实 JD 再短也有百来字。
+JD_MIN_CHARS = 80
 
 ANALYZE_JD_PROMPT = """
 <Role>
@@ -99,6 +103,9 @@ async def analyze_jd(jd: str) -> dict:
     jd = (jd or "").strip()
     if not jd:
         return {"status": "error", "detail": "JD 为空"}
+    if len(jd) < JD_MIN_CHARS:
+        return {"status": "error",
+                "detail": f"这不像一份 JD（只有 {len(jd)} 字符）。请让用户把完整 JD 贴进来再分析"}
     docs = [d for p in resume_paths() if (d := load_file(p))]
     if docs:
         material = "\n\n".join(

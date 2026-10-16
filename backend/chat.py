@@ -196,19 +196,21 @@ async def answer(sid: str, message: str, on_delta=None) -> dict:
     cards = None
     messages = await _messages(sid, message)
     msg = None
+    # max_tokens=4096：SYSTEM_PROMPT 要求简短，但 1024 实测会把正常回答切断
+    # （用户线上撞到过）。ramble 风险靠 pinned + sticky 控制，不靠饿着模型。
+    # pinned/sticky：工具轮钉模型。第一轮钉 gemini；**之后钉上一轮真正接话的
+    # 那个模型**——gemini 的 thought_signature 只认自己产出的 tool_calls，
+    # 中途换模型必 400（groq 接了一轮再换回 gemini 实测复现）。
+    # pinned 只挪第一次尝试，挂了照常降级。
+    pin = GEMINI_MODEL
     for _ in range(MAX_TOOL_STEPS):
-        # max_tokens=1024 而不是 8192：SYSTEM_PROMPT 要求「每次只输出一两句话」，
-        # 而链首是免费小模型，给 8192 它会 rampble 出几十条列点——实测单轮 73 秒。
-        # 上限按产品意图收，慢模型的等待才有界。（compact 的摘要相反，要留 8192。）
-        # pinned=GEMINI：工具轮是「模型强弱直接决定产出质量」的活——链首免费小模型
-        # 带 tools 会每步都调工具、四步跑满也落不下正文（实测 126s 空回复）。
-        # pinned 只挪第一次尝试，gemini 挂了照常降级到链上其余模型。
         if on_delta is not None:
-            msg = await call_llm_stream_async(messages, on_delta, tools=TOOLS, max_tokens=1024, pinned=GEMINI_MODEL)
+            msg = await call_llm_stream_async(messages, on_delta, tools=TOOLS, max_tokens=4096, pinned=pin)
         else:
-            msg = await call_llm_async(messages, tools=TOOLS, max_tokens=1024, pinned=GEMINI_MODEL)
+            msg = await call_llm_async(messages, tools=TOOLS, max_tokens=4096, pinned=pin)
         if not msg["tool_calls"]:
             return await _finish(sid, message, msg, cards)
+        pin = msg["model"]
         # tool_calls 回带要原样：Gemini 3 要求多轮函数调用带回首轮的
         # thought_signature（extra_content 里），重建三件套会丢，下一步直接 400。
         # SDK 对象走 model_dump（与从前一致）；fetch 的 dict 原样拷贝。

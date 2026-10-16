@@ -80,15 +80,6 @@ def agnes_client() -> OpenAI:
 
 
 @cache
-def kilo_client() -> OpenAI:
-    """Kilo 网关，托管 openrouter 的免费模型。模型名要写全，group 别名会解析到别的模型。"""
-    from openai import OpenAI
-
-    ep = ENDPOINTS["kilo"]
-    return OpenAI(api_key=read_env_key(ep["key"]), base_url=ep["base_url"])
-
-
-@cache
 def groq_client() -> OpenAI:
     """Groq 免费端点。本地直连会被 403，离线脚本记得走系统代理。"""
     from openai import OpenAI
@@ -109,7 +100,6 @@ ENDPOINTS = {
     "gemini": {"base_url": GEMINI_BASE_URL, "key": "gemini_apiKey", "env": "GEMINI_API_KEY"},
     "deepseek": {"base_url": "https://api.deepseek.com/v1/", "key": "deepseek_apiKey", "env": "DEEPSEEK_API_KEY"},
     "agnes": {"base_url": "https://apihub.agnes-ai.com/v1/", "key": "agnes_apiKey", "env": "AGNES_API_KEY"},
-    "kilo": {"base_url": "https://api.kilo.ai/api/gateway/", "key": "kilo_apiKey", "env": "KILO_API_KEY"},
     "groq": {"base_url": "https://api.groq.com/openai/v1/", "key": "groq_apiKey", "env": "GROQ_API_KEY"},
 }
 
@@ -160,10 +150,12 @@ def deepseek_open(now: datetime | None = None) -> bool:
 
 
 # 模型链：按优先级排序。DeepSeek 缺 key 或不在开放时段内不入链。
+#
+# 2026-10-16 清出两个死条目（线上实测）：nemotron 100% 挂请求（收了不吐字节，
+# 每步白等 20s 超时）；ling 在 kilo 上已成付费模型（402 Credits Required）。
+# 链从 8 条缩到 6 条，每一步的失败成本从 ~21s 降到毫秒级。
 MODEL_CHAIN = [
     {"name": "agnes-3.0-flash", "endpoint": "agnes"},
-    {"name": "inclusionai/ling-3.1-flash", "endpoint": "kilo"},
-    {"name": "nvidia/nemotron-3-ultra-550b-a55b:free", "endpoint": "kilo"},
     {"name": "openai/gpt-oss-120b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
     {"name": "openai/gpt-oss-20b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
     {"name": "qwen/qwen3.8-27b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
@@ -299,7 +291,6 @@ _SDK_FACTORIES = {
     "gemini": llm_client,
     "deepseek": deepseek_client,
     "agnes": agnes_client,
-    "kilo": kilo_client,
     "groq": groq_client,
 }
 
@@ -414,7 +405,12 @@ async def _run_chain(create, messages: list[dict], *, tools=None, temperature=0.
     """
     chain = active_chain()
     if pinned:
-        chain = sorted(chain, key=lambda item: item["name"] != pinned)
+        # pinned 提到链首并**去重**：MODEL_CHAIN 里本来就有它，不去重的话一轮里
+        # 同一个模型会被试两次（pinned 位 + 自然位），失败成本翻倍。
+        # pinned 不在链上（被时段闸门摘掉/手滑写错）就忽略，照常按链走。
+        hit = next((i for i in chain if i["name"] == pinned), None)
+        if hit:
+            chain = [hit, *[i for i in chain if i["name"] != pinned]]
     last_err = None
     failures = []
     tokens = _input_tokens(messages, tools)

@@ -99,7 +99,7 @@ export const resumeLink = (entry) => {
 /** 简历索引，Chat 卡片之外的两处都要：Resume 页列表、Career 页软链。
     后端在 GET 上补齐每个 Career 的底稿，所以拉一次就够，别各处各拉一遍。 */
 // 取不到就把原因带出去：连着 null 吞掉的话，页面上只剩一句「后端可能没
-// 重启」，而实际是访问码过期 / cookie 掉了 / 500——三种病三种药。
+// 重启」，而实际是会话掉了 / 500——两种病两种药。
 export const loadIndex = () =>
   api("/api/resumes")
     .then((res) => (res.ok ? res.json() : Promise.reject(Object.assign(new Error(`HTTP ${res.status}`), { status: res.status }))))

@@ -4,7 +4,7 @@
 // 「我是谁」和「我烧了多少 token」。用量是 Worker 每轮对话结束时累加进
 // <用户>/usage.json 的，前端只读不算。
 
-import { api, apiJson, setAccessCode } from "./api.js";
+import { api, apiJson } from "./api.js";
 
 const el = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -22,30 +22,17 @@ const fmt = (n) => {
   return String(n);
 };
 
+// 当前登录框显示的是哪一种（"" = 普通登录/注册）。用来防重画，见下。
+let loginMode = null;
+
 function renderLogin(message) {
   const box = root();
+  // **已经在显示同一个登录框就别重画**：重画等于 replaceChildren，用户刚打到
+  // 一半的用户名会被清空、焦点也会丢。页面上任何一次 401 都会走到这里
+  // （app.js 的闸门、chat 启动时的 persona 探测），打字过程中被清掉就是这么来的。
+  if (loginMode === (message || "") && box.querySelector(".meform")) return;
+  loginMode = message || "";
   box.replaceChildren();
-
-  // 「访问码不对」单独一套表单。**不能复用下面那个**：那个 form 里有个空的、
-  // 标着 required 的用户名输入框，点提交时浏览器的表单校验会先拦下它，
-  // submit 事件根本不触发——用户看到的就是「点了没反应」。
-  if (message && message !== "没登录") {
-    const cform = el("form", "meform");
-    const code = el("input", "meform__input");
-    code.type = "password"; code.placeholder = "访问码";
-    code.autocomplete = "off"; code.required = true;
-    const cbtn = el("button", "meform__btn", "用这个访问码再试一次");
-    cbtn.type = "submit";
-    cform.append(code, cbtn, el("p", "meform__note", `${message}。填一次存在这台设备上，以后不用再填`));
-    cform.addEventListener("submit", (e) => {
-      e.preventDefault();
-      setAccessCode(code.value.trim());
-      loadMe();
-    });
-    box.append(cform);
-    code.focus();
-    return;
-  }
 
   const form = el("form", "meform");
   const user = el("input", "meform__input");
@@ -75,11 +62,7 @@ function renderLogin(message) {
       note.textContent = "";
       await loadMe();
     } catch (e) {
-      const detail = e.detail || e.message || "登录失败";
-      // 访问码不对时重画一次登录框，把访问码输入框补上——用户刚填的
-      // 用户名密码会保留不了，但至少给他一条能走通的路。
-      if (detail === "access code 不对") { renderLogin(detail); return; }
-      note.textContent = detail;
+      note.textContent = e.detail || e.message || "登录失败";
     }
   };
 
@@ -102,6 +85,7 @@ function renderLogin(message) {
 
 function renderProfile(data) {
   const box = root();
+  loginMode = null;
   box.replaceChildren();
 
   const card = el("div", "mecard");
@@ -144,8 +128,8 @@ function renderProfile(data) {
 // 自检：把三个页面的接口逐个打一遍，把状态和条数写在屏幕上。
 //
 // 为什么要有它：页面取数失败过一次是「静默空白」——jobs.js 没有 catch，resume/
-// career 显示一句「后端可能没重启」，而真实原因可能是访问码过期、cookie 掉了、
-// 或者真的 500，三种病三种药。没有这一屏就只能在浏览器控制台里猜。
+// career 显示一句「后端可能没重启」，而真实原因可能是会话掉了或者真的 500，
+// 两种病两种药。没有这一屏就只能在浏览器控制台里猜。
 // 返回的是节点本身，**不是 async**：写成 async 的话 box.append(selfCheck())
 // 塞进去的是个 Promise，页面显示 [object Promise]，自检一条都出不来。
 function selfCheck() {
@@ -183,12 +167,7 @@ export async function loadMe() {
     renderProfile(data);
     onAuth(true);
   } catch (e) {
-    // **不要按 status 一刀切吞掉 detail**：两种 401 的含义完全不同——「没登录」
-    // 是正常状态（空账户，静默出登录框），而「access code 不对」必须原样显示，
-    // 否则登录框里不会出现访问码输入框，用户填完用户名密码提交必然又被挡在
-    // 访问码这一关，只能看见一句没头没尾的「access code 不对」。
-    const detail = e.detail || e.message || "";
-    renderLogin(detail === "没登录" ? "" : detail);
+    renderLogin(e.detail === "没登录" ? "" : (e.detail || e.message || ""));
     onAuth(false);
   }
   return root();

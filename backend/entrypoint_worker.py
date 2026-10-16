@@ -5,8 +5,9 @@ Slice A Spike 已验证：纯 Python 包进得了 pyodide、js.fetch 流式 SSE 
 灌 store，领域函数无感复用；C1 起 LLM 调用走 common 的 fetch 传输（/api/debug/llm
 是它的验收与运维探针）。
 
-路由仍在这个文件里。所有请求先过 access code：Worker 持有 LLM key，
-不设防等于把六家的调用权公开。
+路由仍在这个文件里。**没有站级 access code**（用户要求去掉）：现在唯一的门
+是下面按用户名的登录——拿到网址的人只能看见登录页，进不去；进了自己的账号
+只看得到自己的数据。
 """
 
 import api_auth
@@ -16,7 +17,6 @@ import api_write
 import asyncio
 import common
 import json
-import secrets
 import time
 from datetime import date
 from urllib.parse import parse_qs, urlparse
@@ -72,15 +72,11 @@ async def _merge_usage(snapshot: dict) -> None:
 
 common.bind_usage_flush(_merge_usage)
 
-ACCESS_HEADER = "x-access-code"
 PROBE_KEY = "_spike/probe.json"
 
 # 每个用户命名空间下的三个单文件 + resumes/ 前缀下的全部简历。合计 <300KB。
 STORE_KEYS = ("careers.json", "boss_jobs.json", "persona.json")
 RESUME_PREFIX = "resumes/"
-
-# 不需要登录的端点：access code 已经守着这站，而这两个是自己给自己发的凭据。
-OPEN_PATHS = ("/api/auth/login", "/api/auth/register")
 
 
 def _ms(t0: float) -> float:
@@ -91,20 +87,6 @@ def _ms(t0: float) -> float:
 
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-
-def _authorized(request, env) -> bool:
-    """access code 校验。secret 缺失时一律拒绝——宁可在 dev 里吵，不要裸奔上线。"""
-    try:
-        expected = env.ACCESS_CODE
-    except AttributeError:
-        return False
-    if not expected:
-        return False
-    given = request.headers.get(ACCESS_HEADER) or ""
-    if not given:
-        given = parse_qs(urlparse(request.url).query).get("code", [""])[0]
-    return secrets.compare_digest(given, expected)
 
 
 def _cookie(request, name: str) -> str:
@@ -131,8 +113,6 @@ async def _resolve_user(request) -> str:
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
-        if not _authorized(request, self.env):
-            return Response.json({"detail": "access code 不对"}, status=401)
         path = urlparse(request.url).path
         if path == "/api/ping":
             return await self._ping(request)

@@ -62,7 +62,7 @@ SYSTEM_PROMPT 要求「每次只输出一两句话」，弱模型给大额度会
 
 ```
 backend/
-  entrypoint_worker.py         Worker 入口：路由表、access code、_refresh 灌 store、
+  entrypoint_worker.py         Worker 入口：路由表、用户名登录、_refresh 灌 store、
                                bindings 注入（模型 key / session / writer）
   api_read.py                  只读 API：jobs / careers / persona / me / resumes
   api_chat.py                  chat HTTP 层：四端点、SSE（TransformStream + 5s 心跳）
@@ -184,7 +184,8 @@ Career 上限 3 个（`build_careers.py::MAX_CAREERS`）：招聘平台只让留
 
 **2026-10-16 迁移完成，本机不再是运行时。** 入口
 `https://argus-web.luent-hat.workers.dev`（Worker，免费档）。所有请求先过
-access code：`X-Access-Code` 头或 `?code=` 查询参数，密钥是 Worker secret
+登录：用户名 + 密码比对 R2 的 users.json（明文），成功种 HttpOnly 会话 cookie；
+站级没有 access code——网址本身就是唯一的秘密，拿到网址的人只能看见登录页
 `ACCESS_CODE`——Worker 持有六家 LLM key，不设防等于公开调用权。
 
 - **形态**：Workers Static Assets（`backend/static` 原样托管，SPA 回退）

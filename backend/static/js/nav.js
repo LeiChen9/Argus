@@ -1,5 +1,5 @@
 const views = [...document.querySelectorAll(".view")];
-const topLogo = document.getElementById("toplogo");
+const chatClear = document.getElementById("chat-clear");
 
 // 详情页不在导航里，返回时要回到它进来之前的那一页。
 let last = "home";
@@ -11,9 +11,9 @@ export const go = (name) => {
     view.classList.toggle("is-active", on);
   }
   if (name !== "job" && name !== "resumedit") last = name;
-  // 顶部 logo 就是回首页的入口（fixed，压在所有页面之上）。已经在首页时不必
-  // 显示——点它什么都不会发生，纯占地方。
-  if (topLogo) topLogo.hidden = name === "home";
+  // 顶栏常驻。左边的头像点它回首页；右边那颗「清空对话」只有 chat 用得上，
+  // 别的页面就收起来（顶栏高度不变，视觉上不会跳）。
+  if (chatClear) chatClear.hidden = name !== "chat";
 };
 
 export const back = () => go(last);

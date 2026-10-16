@@ -13,16 +13,26 @@
 <body>
 <div class="app">
 
-  <!-- ── 固定 logo：任何页面点它都回首页。底部 tabbar 去掉后，这是全局唯一的
-       「回首页」入口，所以放在最上面、压在所有页面之上。 ── -->
-  <button class="toplogo" id="toplogo" type="button" aria-label="回首页">
-    <img src="assets/argus-anime.webp" width="1024" height="1024" alt="">
-  </button>
+  <!-- ── 顶部固定横条：每个页面都有，跟 chat 原来的头部一个样式 ──
+       左边是 Argus 的头像（点它回首页，这是全局唯一的回首页入口），中间名字，
+       右边放当前页面的操作（只有 chat 有「清空对话」）。 ── -->
+  <header class="topbar" id="topbar">
+    <button class="topbar__logo" id="toplogo" type="button" aria-label="回首页">
+      <img src="assets/argus-anime.webp" width="1024" height="1024" alt="">
+    </button>
+    <span class="topbar__name">Argus</span>
+    <button class="topbar__act" id="chat-clear" type="button" aria-label="清空对话上下文" hidden>
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M4.5 7h15M9.5 7V5.6A1.6 1.6 0 0 1 11.1 4h1.8a1.6 1.6 0 0 1 1.6 1.6V7M6.8 7l.7 11.3A2 2 0 0 0 9.5 20.1h5a2 2 0 0 0 2-1.8L17.2 7"
+              stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </header>
 
   <main class="stage">
 
     <!-- ── 首页 ── -->
-    <section class="view view--center is-active" id="view-home">
+    <section class="view view--home is-active" id="view-home">
       <div class="hero">
         <div class="npc-wrap">
           <img class="npc" src="assets/argus-anime.webp" width="1024" height="1024"
@@ -30,7 +40,7 @@
         </div>
         <p class="greeting" id="greeting"></p>
       </div>
-      <!-- ── 首页即导航中枢：底部栏去掉了，各页面从这里进 ── -->
+      <!-- ── 首页内容底部的导航排。不固定：跟着内容走，只有首页有 ── -->
       <nav class="homenav" id="homenav" aria-label="主导航">
             <button class="homenav__item" data-view="chat" type="button">
               <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
@@ -77,17 +87,6 @@
     <!-- ── Chat：与 Argus 的对话（tabbar 让位给 composer） ── -->
     <section class="view" id="view-chat" hidden>
       <div class="chat">
-
-        <header class="chat__head">
-          <img class="chat__avatar" src="assets/argus-anime.webp" alt="">
-          <span class="chat__name">Argus</span>
-          <button class="chat__clear" id="chat-clear" type="button" aria-label="清空对话上下文">
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M4.5 7h15M9.5 7V5.6A1.6 1.6 0 0 1 11.1 4h1.8a1.6 1.6 0 0 1 1.6 1.6V7M6.8 7l.7 11.3A2 2 0 0 0 9.5 20.1h5a2 2 0 0 0 2-1.8L17.2 7"
-                    stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
-        </header>
 
         <div class="msgs" id="msgs"></div>
 

@@ -5,7 +5,7 @@
 import { el, fold } from "./dom.js";
 import { jobCards } from "./cards.js";
 import { fetchResumes, resumeLink } from "./resume.js";
-import { api } from "./api.js";
+import { api, errNote } from "./api.js";
 
 const stage = document.getElementById("view-career");
 
@@ -37,13 +37,13 @@ const career = (f, resume) => {
 
 export const loadCareer = () =>
   Promise.all([
-    api("/api/careers").then((res) => (res.ok ? res.json() : null)),
+    api("/api/careers").then((res) => (res.ok ? res.json() : Promise.reject(Object.assign(new Error(`HTTP ${res.status}`), { status: res.status })))),
     fetchResumes(),
   ]).then(([doc, resumes]) => {
     // 区分「取不到」和「还没有」：后端没重启时这接口是 404，冒充成「还没跑
     // S1」是骗人——S1 可能早就跑过了，文件就在 data/ 里躺着。
     if (!doc) {
-      stage.replaceChildren(el("p", "placeholder__note", "读不到 Career，后端可能没重启"));
+      stage.replaceChildren(errNote(new Error("取不到 Career"), "取 Career"));
       return;
     }
     if (doc.careers.length) {

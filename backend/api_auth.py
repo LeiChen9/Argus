@@ -14,7 +14,11 @@ import re
 from workers import Response
 
 USERS_KEY = "users.json"
-COOKIE = "argus_user"
+# **会话 cookie**（没有 Max-Age）：浏览器关掉就没了，下次打开是空账户，要重新
+# 登录。Cookie 名带版本号是故意的：上一版用的是一年期的 argus_user，换个名字
+# 等于把所有人立刻踢回未登录，不然「Max-Age 去掉了但旧 cookie 还在」会让人
+# 以为没改成功。登出会显式写一个空的过期 cookie，不需要等它自然过期。
+COOKIE = "argus_user_v2"
 
 # 职位库和职能地图是**共享资产**（crawler 抓来的岗位侧数据，不含任何个人信息），
 # 新用户注册时从种子用户拷一份到自己名下，否则新账号进来是一片空白，看着像坏了。
@@ -106,6 +110,7 @@ async def logout() -> Response:
 
 def _cookie_header(value: str) -> dict:
     """Set-Cookie。SameSite=Lax：同源站点用，够用；Secure+HttpOnly 让 JS 读不到
-    身份、也防明文传输（公网本来就是 https）。logout 传空值即过期。"""
-    cookie = f"{COOKIE}={value}; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax"
+    身份、也防明文传输（公网本来就是 https）。**不带 Max-Age = 会话 cookie**，
+    关掉浏览器即失效——这就是「默认空账户」。logout 传空值即当场过期。"""
+    cookie = f"{COOKIE}={value}; Path=/; HttpOnly; Secure; SameSite=Lax"
     return {"set-cookie": cookie}

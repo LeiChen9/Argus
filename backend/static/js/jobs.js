@@ -1,7 +1,7 @@
 /* Jobs 页：渲染 data/jobs.json 里的持久化岗位。 */
 
 import { jobCard } from "./cards.js";
-import { api } from "./api.js";
+import { api, errNote } from "./api.js";
 
 const meta = document.getElementById("jobs-meta");
 const grid = document.getElementById("jobs-grid");
@@ -19,5 +19,9 @@ export const loadJobs = () => {
         return;
       }
       grid.replaceChildren(...jobs.map(jobCard));
+    })
+    .catch((e) => {
+      meta.textContent = "";
+      grid.replaceChildren(errNote(e, "取岗位"));
     });
 };

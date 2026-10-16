@@ -14,7 +14,7 @@
 import { el } from "./dom.js";
 import { go, back as navBack } from "./nav.js";
 import { loadIndex, work } from "./resume.js";
-import { api } from "./api.js";
+import { api, errNote } from "./api.js";
 
 const list = document.getElementById("resume-list");
 
@@ -35,14 +35,13 @@ const row = (entry) => {
   return box;
 };
 
-const note = (text) => list.replaceChildren(el("p", "placeholder__note", text));
+const note = (node) => list.replaceChildren(typeof node === "string" ? el("p", "placeholder__note", node) : node);
 
 export const loadResume = () =>
   loadIndex().then((rows) => {
-    if (!rows) return note("读不到简历，后端可能没重启");
-    if (!rows.length) return note("还没有简历。去 Chat 里说个想投的职能，Argus 就会开始挖你的经历");
+    if (!rows) return note("还没有简历。去 Chat 里说个想投的职能，Argus 就会开始挖你的经历");
     list.replaceChildren(...rows.map(row));
-  });
+  }).catch((e) => note(errNote(e, "取简历")));
 
 const idFromHash = () => {
   const m = /^#resume\/(.+)$/.exec(location.hash);

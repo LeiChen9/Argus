@@ -16,6 +16,9 @@ export const accessCode = () => {
   return v;
 };
 
+/** 手工补填访问码（登录页在「access code 不对」时会给一个输入框）。 */
+export const setAccessCode = (v) => { if (v) localStorage.setItem(KEY, v); };
+
 // 没登录时（401 + detail「没登录」）各页面要能退回来。订阅方是 app.js 的登录闸门。
 const onUnauthorized = new Set();
 export const whenUnauthorized = (fn) => { onUnauthorized.add(fn); return () => onUnauthorized.delete(fn); };
@@ -40,4 +43,21 @@ export const apiJson = async (path, opts) => {
   const res = await api(path, opts);
   if (!res.ok) throw Object.assign(new Error((await res.text()) || `HTTP ${res.status}`), { status: res.status });
   return res.json();
+};
+
+/** 把失败说成人话显示在页面上。
+ *
+ * 没有它的时候，任何一次取数失败都变成「空白页」或一句误导的「后端可能没
+ * 重启」——access code 过期、cookie 掉了、真的 500，看起来一模一样，排查
+ * 全靠猜。三个页面的加载失败都走这里。
+ */
+export const errNote = (err, what) => {
+  const p = document.createElement("p");
+  p.className = "placeholder__note";
+  const why = err?.detail || err?.message || String(err);
+  // 访问码的问题单独点名：它要修的是「重新用 ?code= 打开」，不是重试。
+  p.textContent = why === "access code 不对"
+    ? "访问码不对：请用 ?code=… 重新打开这个网址"
+    : `${what}失败（${err?.status || "?"}）：${why}`;
+  return p;
 };

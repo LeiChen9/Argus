@@ -4,7 +4,7 @@
 // 「我是谁」和「我烧了多少 token」。用量是 Worker 每轮对话结束时累加进
 // <用户>/usage.json 的，前端只读不算。
 
-import { api, apiJson } from "./api.js";
+import { api, apiJson, setAccessCode } from "./api.js";
 
 const el = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -33,13 +33,35 @@ function renderLogin(message) {
   const pass = el("input", "meform__input");
   pass.name = "password"; pass.type = "password"; pass.placeholder = "密码";
   pass.autocomplete = "current-password"; pass.required = true;
-  const submit = el("button", "meform__btn", "登录");
-  submit.type = "submit";
-  const swap = el("button", "meform__alt", "没有账号？注册");
-  swap.type = "button";
 
   const note = el("p", "meform__note", message || "");
-  form.append(user, pass, submit, note);
+  form.append(user, pass);
+
+  // 访问码不对时补一个输入框：之前只能靠 ?code= 打开网址带进来，用裸网址进来
+  // 的人（收藏夹、手输）就被挡在门外，且看不出到底缺了什么。
+  if (message === "access code 不对") {
+    const code = el("input", "meform__input");
+    code.type = "password"; code.placeholder = "访问码";
+    code.autocomplete = "off";
+    form.append(code);
+    note.textContent = "先填访问码，它会存在这台设备上，以后不用再填";
+    const submit = el("button", "meform__btn", "用这个访问码再试一次");
+    submit.type = "submit";
+    form.append(submit);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      setAccessCode(code.value.trim());
+      renderLogin("");
+      loadMe();
+    });
+    box.append(form);
+    code.focus();
+    return;
+  }
+
+  const submit = el("button", "meform__btn", "登录");
+  submit.type = "submit";
+  form.append(submit, note);
 
   const send = async (path, body) => {
     note.textContent = "…";
@@ -107,8 +129,41 @@ function renderProfile(data) {
   out.addEventListener("click", async () => {
     await api("/api/auth/logout", { method: "POST" });
     renderLogin("已退出");
+    onAuth(false);
   });
   box.append(out);
+
+  box.append(selfCheck());
+}
+
+// 自检：把三个页面的接口逐个打一遍，把状态和条数写在屏幕上。
+//
+// 为什么要有它：页面取数失败过一次是「静默空白」——jobs.js 没有 catch，resume/
+// career 显示一句「后端可能没重启」，而真实原因可能是访问码过期、cookie 掉了、
+// 或者真的 500，三种病三种药。没有这一屏就只能在浏览器控制台里猜。
+async function selfCheck() {
+  const wrap = el("div", "meusage");
+  wrap.append(el("div", "meusage__title", "数据自检"));
+  const targets = [["/api/careers", "careers"], ["/api/jobs", "jobs"], ["/api/resumes", "resumes"]];
+  for (const [path, name] of targets) {
+    const line = el("div", "meusage__row");
+    line.append(el("span", "meusage__model", name));
+    line.append(el("span", "meusage__nums", "…"));
+    wrap.append(line);
+    api(path).then(async (res) => {
+      const body = await res.text();
+      let detail = "";
+      try {
+        const doc = JSON.parse(body);
+        const count = doc.careers?.length ?? Object.keys(doc.jobs || {}).length ?? (doc.resumes?.length ?? "-");
+        detail = res.ok ? `${count} 条` : `HTTP ${res.status}`;
+      } catch { detail = `HTTP ${res.status}`; }
+      line.lastChild.textContent = `${detail}（${res.status}）`;
+    }).catch((e) => {
+      line.lastChild.textContent = `失败：${e.detail || e.message}`;
+    });
+  }
+  return wrap;
 }
 
 // 登录状态变了就通知外面（app.js 拿它开关 tabbar）——登录成功后 tabbar 要回来。

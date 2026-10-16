@@ -264,6 +264,25 @@ async def clear(sid: str) -> dict:
     return {"cleared": n, "resume_career": mode}
 
 
+async def undo(sid: str) -> dict:
+    """撤掉最后一轮（末尾的 user + assistant 两条）。
+
+    存在的理由是「用户按了停止 / 改了刚才那句话重发」：客户端掐断的是连接，
+    Worker 那一轮往往**照样跑完并存盘**（_save_session 在拼响应之前就做了）。
+    不撤的话，改完重发会让会话里留下原始那句 + 完整回答 + 改后那句 + 新回答，
+    模型后面看到的是一个自相矛盾的四条记录。
+
+    只撤末尾完整的一轮；不足两条（说明这一轮压根没存盘）就什么都不做。
+    """
+    sess = await _load_session(sid)
+    h = sess["history"]
+    if len(h) < 2 or h[-1]["role"] != "assistant" or h[-2]["role"] != "user":
+        return {"undone": 0}
+    del h[-2:]
+    await _save_session(sid, sess)
+    return {"undone": 2}
+
+
 async def history(sid: str) -> dict:
     """最后一轮对话，用来在请求被掐断后把已经算完的答案取回来。
 

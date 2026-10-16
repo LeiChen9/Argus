@@ -10,6 +10,40 @@ const input = document.getElementById("input");
 const file = document.getElementById("file");
 const attach = document.getElementById("attach");
 const chip = document.getElementById("chip");
+const send = document.getElementById("send");
+
+// ── 一轮的进行状态 ──
+// busy：有一轮在跑（决定了发送键是箭头还是方块）。
+// awaiting：用户那句话已经发出、**还没等到回答**——只有这个窗口里那条气泡
+//          才可以点开改。「AI 已经回答过」就不给改：那种情况要去改会话历史，
+//          代价和收益不成比例，用户要改就重新开一轮。
+let busy = false;
+let awaiting = false;
+// 用户是否主动按了停止。用来在收尾时区分「这一轮被取消了」和「它自己答完了」——
+// 被取消的那一句仍然该可改（AI 还没回答），答完的就不给了。
+let stoppedByUser = false;
+let controller = null;
+let lastUserNode = null;
+
+const setBusy = (on) => {
+  busy = on;
+  send.classList.toggle("icon-btn--busy", on);
+  send.setAttribute("aria-label", on ? "停止生成" : "发送");
+  if (on) controller = new AbortController();
+};
+
+const stop = () => {
+  controller?.abort();
+  stoppedByUser = true;
+  // awaiting 保持 true：停下来就等于「AI 还没回答」，那句话仍然该能改。
+  setBusy(false);
+  markEditable();
+  // 「已停止」的记号落在最后一个 Argus 气泡上。模型还在想的时候只有打字气泡，
+  // 那就直接收掉——说「已停止」不如什么都不说，反正用户那句话还摆着、能改。
+  const lastThem = msgs.querySelector(".msg--them:last-of-type");
+  if (lastThem?.querySelector(".typing")) lastThem.remove();
+  else if (lastThem) lastThem.classList.add("msg--stopped");
+};
 
 // 返回 node：showTyping() 靠它拿回挂载后的节点，之后才能 pending.remove()
 const show = (node) => {
@@ -17,6 +51,9 @@ const show = (node) => {
   msgs.scrollTop = msgs.scrollHeight;
   return node;
 };
+
+// 流式过程中那个正在长大的气泡：停止时要给它留个「已停止」的记号。
+let pendingBubble = null;
 
 const row = (who, text, bubble) => {
   const el = document.createElement("div");
@@ -81,6 +118,65 @@ const showResume = (data) => {
 const clearResume = () => {
   resumeNode?.remove();
   resumeNode = null;
+};
+
+// ── 改自己刚发出去、还没等到回答的那句 ──
+// 只给最后一条用户气泡加可点样式：更早的都已经有回答了，改了也没地方生效。
+const markEditable = () => {
+  if (!lastUserNode) return;
+  const bubble = lastUserNode.querySelector(".bubble");
+  if (!bubble) return;
+  bubble.classList.toggle("bubble--editable", awaiting);
+  if (awaiting) {
+    bubble.title = "点一下改这句";
+    bubble.onclick = () => startEdit(bubble);
+  } else {
+    bubble.removeAttribute("title");
+    bubble.onclick = null;
+  }
+};
+
+const startEdit = (bubble) => {
+  const original = bubble.textContent;
+  const box = document.createElement("textarea");
+  box.className = "bubble--editbox";
+  box.value = original;
+  bubble.replaceWith(box);
+  box.focus();
+  box.setSelectionRange(box.value.length, box.value.length);
+
+  const finish = async (commit) => {
+    box.onblur = null;
+    const text = box.value.trim();
+    // 取消/空内容：当作没改过，把原样放回去
+    if (!commit || !text || text === original) {
+      const back = document.createElement("p");
+      back.className = "bubble";
+      back.textContent = original;
+      box.replaceWith(back);
+      markEditable();
+      return;
+    }
+    const shown = document.createElement("p");
+    shown.className = "bubble";
+    shown.textContent = text;
+    box.replaceWith(shown);
+    // 重发前先撤掉服务端那一轮：连接虽然被掐了，Worker 往往照跑完存了盘，
+    // 不撤的话会话里会留下「原句 + 完整回答 + 改后这句 + 新回答」四条自相矛盾的记录。
+    try {
+      await api("/api/chat/undo", { method: "POST", headers: { "X-Session-Id": sid } });
+    } catch {}
+    lastUserNode = shown.parentElement;
+    awaiting = true;
+    markEditable();
+    await sendMessage(text);
+  };
+
+  box.onblur = () => finish(false);
+  box.onkeydown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); finish(true); }
+    if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  };
 };
 
 document.getElementById("chat-back").addEventListener("click", () => go("home"));
@@ -150,11 +246,17 @@ const readStream = async (res, pending) => {
       const data = JSON.parse(frame.match(/^data: (.*)$/m)?.[1] ?? "{}");
       if (ev === "error") { const e = new Error(data.detail); e.fromServer = true; throw e; }
       if (ev === "content") {
-        if (!bubble) { pending?.remove(); bubble = document.createElement("p"); bubble.className = "bubble"; show(row("them", null, bubble)); }
+        if (!bubble) {
+          pending?.remove();
+          bubble = document.createElement("p");
+          bubble.className = "bubble";
+          pendingBubble = show(row("them", null, bubble));
+        }
         raw += data.content;
         bubble.textContent = raw;
         msgs.scrollTop = msgs.scrollHeight;
       } else if (ev === "reply") {
+        pendingBubble = null;
         if (bubble) { const md = document.createElement("div"); md.className = "bubble md"; md.innerHTML = data.reply; bubble.replaceWith(md); }
         else { pending?.remove(); showReply(data.reply); }
         return data;
@@ -164,8 +266,48 @@ const readStream = async (res, pending) => {
   return null;
 };
 
+// 发一轮。抽成函数是因为「改完重发」要复用同一条路径——两条路径各自维护
+// busy/awaiting 的话，迟早会漏掉一处状态。
+const sendMessage = async (message) => {
+  stoppedByUser = false;
+  const node = row("me", message);
+  lastUserNode = show(node);
+  awaiting = true;
+  markEditable();
+
+  setBusy(true);
+  const pending = showTyping();
+  try {
+    const res = await api("/api/chat/stream", {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", "X-Session-Id": sid },
+      body: JSON.stringify({ message }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || res.status);
+    const data = await readStream(res, pending);
+    if (!data) throw new Error("连接中断");
+    if (data.jobs?.length) show(row("them", null, jobCards(data.jobs)));
+    if (data.resume) showResume(data.resume);
+  } catch (err) {
+    // 用户主动停止不算错误：一个 AbortError 直接静默，气泡上已经标了「已停止」。
+    if (err.name === "AbortError") return;
+    // 后端明确报错（如所有模型不可用）时它根本没存盘，轮询 2 分钟纯属白等，直接显示。
+    // 只有连接被掐（无 error 事件）才去捞，捞不回来才报原始错误，别把真错误盖掉。
+    if (err.fromServer || !(await recoverReply(message))) show(row("them", `我说不了话：${err.message}`));
+  } finally {
+    pending.remove();
+    if (busy) setBusy(false);
+    // 主动停掉的：awaiting 留着，用户那句话还能改；自己答完的：收回可编辑。
+    if (!stoppedByUser) awaiting = false;
+    markEditable();
+  }
+};
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (busy) { stop(); return; }   // 方块状态下这颗按钮是「停止」，不是「发送」
+
   const picked = file.files[0];
   const message = input.value.trim();
   // 有文件时：走简历上传解析，无视输入框文字
@@ -195,28 +337,9 @@ form.addEventListener("submit", async (event) => {
     return;
   }
   if (!message) return;
-  show(row("me", message));
   input.value = "";
   fit();
-  const pending = showTyping();
-  try {
-    const res = await api("/api/chat/stream", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Session-Id": sid },
-      body: JSON.stringify({ message }),
-    });
-    if (!res.ok) throw new Error((await res.json()).detail || res.status);
-    const data = await readStream(res, pending);
-    if (!data) throw new Error("连接中断");
-    if (data.jobs?.length) show(row("them", null, jobCards(data.jobs)));
-    if (data.resume) showResume(data.resume);
-  } catch (err) {
-    // 后端明确报错（如所有模型不可用）时它根本没存盘，轮询 2 分钟纯属白等，直接显示。
-    // 只有连接被掐（无 error 事件）才去捞，捞不回来才报原始错误，别把真错误盖掉。
-    if (err.fromServer || !(await recoverReply(message))) show(row("them", `我说不了话：${err.message}`));
-  } finally {
-    pending.remove();
-  }
+  await sendMessage(message);
 });
 
 attach.addEventListener("click", () => file.click());

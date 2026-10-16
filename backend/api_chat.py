@@ -14,7 +14,7 @@ import js
 
 import common
 import sessions
-from chat import answer, clear, history
+from chat import answer, clear, history, undo
 from workers import Response
 
 SESSION_HEADER = "x-session-id"
@@ -116,6 +116,10 @@ async def chat_history(request) -> Response:
     return Response.json(await history(_sid(request)))
 
 
+async def chat_undo(request) -> Response:
+    return Response.json(await undo(_sid(request)))
+
+
 async def dispatch(path: str, request) -> Response:
     """entrypoint 的 chat 段路由表。"""
     if path == "/api/chat":
@@ -126,4 +130,6 @@ async def dispatch(path: str, request) -> Response:
         return await chat_clear(request)
     if path == "/api/chat/history":
         return await chat_history(request)
+    if path == "/api/chat/undo":
+        return await chat_undo(request)
     raise Bad(f"没有 {path}", status=404)

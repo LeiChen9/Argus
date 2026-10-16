@@ -557,8 +557,13 @@ button { font: inherit; color: inherit; }
   flex: 0 0 auto;
   width: 38px;
   height: 38px;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* WebKit 把 inline <svg> 当成有基线的行内内容，图标会比圆心高那么 1-2px
+     ——手机端尤其明显。line-height: 0 + svg display:block 把基线彻底去掉，
+     剩下的居中就只由 flex 决定，跨引擎一致。 */
+  line-height: 0;
   border: 0;
   border-radius: 19px;
   background: var(--glow);
@@ -568,12 +573,45 @@ button { font: inherit; color: inherit; }
 }
 
 .icon-btn:active { opacity: .7; }
-.icon-btn svg { width: 20px; height: 20px; }
+.icon-btn svg { display: block; width: 20px; height: 20px; }
 
 .icon-btn--send {
   background: var(--accent);
   color: var(--on-accent);
 }
+
+/* 同一颗按钮两副面孔：默认是箭头，等模型时换成方块（停止）。 */
+/* 选择器必须带上 svg：上面的 `.icon-btn svg { display: block }` 是 (0,1,1)，
+   比这里的类选择器 (0,1,0) 更具体，会盖掉 display:none，两个图标就并排显示
+   ——箭头被挤偏 6.5px，实测就是这么发现的。 */
+svg.icon-btn__stop { display: none; }
+.icon-btn--busy svg.icon-btn__stop { display: block; }
+.icon-btn--busy svg.icon-btn__send-arrow { display: none; }
+
+/* 用户自己刚发出去、还没等到回答的那条：可点开改。加一点点可点的暗示，
+   不做成一个常驻按钮——改自己上一句话是低频动作，不该在气泡上挂常驻控件。 */
+.bubble--editable {
+  cursor: pointer;
+  outline: 0.5px dashed var(--hairline);
+  outline-offset: 2px;
+}
+.bubble--editbox {
+  width: min(78vw, 420px);
+  min-height: 64px;
+  padding: 9px 12px;
+  line-height: 1.5;
+  font: inherit;
+  font-size: 15px;
+  color: var(--ink);
+  background: #fff;
+  border: 0.5px solid var(--accent);
+  border-radius: 14px;
+  resize: vertical;
+}
+.bubble--editbox:focus { outline: none; }
+
+/* 「已停止」：用户主动掐掉的这一轮，留个记号，免得看着像答完了。 */
+.msg--stopped .bubble { opacity: .55; }
 
 /* ── Jobs 页 ── */
 .view--jobs {

@@ -64,10 +64,15 @@
               </svg>
             </button>
             <textarea class="composer__input" id="input" rows="1" autocomplete="off" placeholder="说说你的经历…"></textarea>
-            <button class="icon-btn icon-btn--send" type="submit" aria-label="发送">
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <button class="icon-btn icon-btn--send" id="send" type="submit" aria-label="发送">
+              <!-- 同一颗按钮两副面孔：默认箭头，等模型时换成方块（停止）。两个 svg
+                   都在 DOM 里，用 CSS 切换，省掉一次 innerHTML 重绘。 -->
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" class="icon-btn__send-arrow">
                 <path d="M4 12h13M11.5 6l6 6-6 6" stroke="currentColor" stroke-width="2"
                       stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" class="icon-btn__stop">
+                <rect x="7.5" y="7.5" width="9" height="9" rx="1.5" fill="currentColor"/>
               </svg>
             </button>
           </div>

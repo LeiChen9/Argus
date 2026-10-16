@@ -26,6 +26,27 @@ function renderLogin(message) {
   const box = root();
   box.replaceChildren();
 
+  // 「访问码不对」单独一套表单。**不能复用下面那个**：那个 form 里有个空的、
+  // 标着 required 的用户名输入框，点提交时浏览器的表单校验会先拦下它，
+  // submit 事件根本不触发——用户看到的就是「点了没反应」。
+  if (message && message !== "没登录") {
+    const cform = el("form", "meform");
+    const code = el("input", "meform__input");
+    code.type = "password"; code.placeholder = "访问码";
+    code.autocomplete = "off"; code.required = true;
+    const cbtn = el("button", "meform__btn", "用这个访问码再试一次");
+    cbtn.type = "submit";
+    cform.append(code, cbtn, el("p", "meform__note", `${message}。填一次存在这台设备上，以后不用再填`));
+    cform.addEventListener("submit", (e) => {
+      e.preventDefault();
+      setAccessCode(code.value.trim());
+      loadMe();
+    });
+    box.append(cform);
+    code.focus();
+    return;
+  }
+
   const form = el("form", "meform");
   const user = el("input", "meform__input");
   user.name = "username"; user.placeholder = "用户名"; user.autocomplete = "username";
@@ -35,29 +56,9 @@ function renderLogin(message) {
   pass.autocomplete = "current-password"; pass.required = true;
 
   const note = el("p", "meform__note", message || "");
+  const swap = el("button", "meform__alt", "没有账号？注册");
+  swap.type = "button";
   form.append(user, pass);
-
-  // 访问码不对时补一个输入框：之前只能靠 ?code= 打开网址带进来，用裸网址进来
-  // 的人（收藏夹、手输）就被挡在门外，且看不出到底缺了什么。
-  if (message === "access code 不对") {
-    const code = el("input", "meform__input");
-    code.type = "password"; code.placeholder = "访问码";
-    code.autocomplete = "off";
-    form.append(code);
-    note.textContent = "先填访问码，它会存在这台设备上，以后不用再填";
-    const submit = el("button", "meform__btn", "用这个访问码再试一次");
-    submit.type = "submit";
-    form.append(submit);
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      setAccessCode(code.value.trim());
-      renderLogin("");
-      loadMe();
-    });
-    box.append(form);
-    code.focus();
-    return;
-  }
 
   const submit = el("button", "meform__btn", "登录");
   submit.type = "submit";
@@ -74,7 +75,11 @@ function renderLogin(message) {
       note.textContent = "";
       await loadMe();
     } catch (e) {
-      note.textContent = e.detail || e.message || "登录失败";
+      const detail = e.detail || e.message || "登录失败";
+      // 访问码不对时重画一次登录框，把访问码输入框补上——用户刚填的
+      // 用户名密码会保留不了，但至少给他一条能走通的路。
+      if (detail === "access code 不对") { renderLogin(detail); return; }
+      note.textContent = detail;
     }
   };
 
@@ -141,26 +146,28 @@ function renderProfile(data) {
 // 为什么要有它：页面取数失败过一次是「静默空白」——jobs.js 没有 catch，resume/
 // career 显示一句「后端可能没重启」，而真实原因可能是访问码过期、cookie 掉了、
 // 或者真的 500，三种病三种药。没有这一屏就只能在浏览器控制台里猜。
-async function selfCheck() {
+// 返回的是节点本身，**不是 async**：写成 async 的话 box.append(selfCheck())
+// 塞进去的是个 Promise，页面显示 [object Promise]，自检一条都出不来。
+function selfCheck() {
   const wrap = el("div", "meusage");
   wrap.append(el("div", "meusage__title", "数据自检"));
   const targets = [["/api/careers", "careers"], ["/api/jobs", "jobs"], ["/api/resumes", "resumes"]];
   for (const [path, name] of targets) {
+    const nums = el("span", "meusage__nums", "…");
     const line = el("div", "meusage__row");
-    line.append(el("span", "meusage__model", name));
-    line.append(el("span", "meusage__nums", "…"));
+    line.append(el("span", "meusage__model", name), nums);
     wrap.append(line);
     api(path).then(async (res) => {
       const body = await res.text();
-      let detail = "";
+      let detail;
       try {
         const doc = JSON.parse(body);
-        const count = doc.careers?.length ?? Object.keys(doc.jobs || {}).length ?? (doc.resumes?.length ?? "-");
+        const count = doc.careers?.length ?? doc.resumes?.length ?? (doc.jobs?.length ?? "-");
         detail = res.ok ? `${count} 条` : `HTTP ${res.status}`;
       } catch { detail = `HTTP ${res.status}`; }
-      line.lastChild.textContent = `${detail}（${res.status}）`;
+      nums.textContent = `${detail}（${res.status}）`;
     }).catch((e) => {
-      line.lastChild.textContent = `失败：${e.detail || e.message}`;
+      nums.textContent = `失败：${e.detail || e.message}`;
     });
   }
   return wrap;
@@ -176,7 +183,12 @@ export async function loadMe() {
     renderProfile(data);
     onAuth(true);
   } catch (e) {
-    renderLogin(e.status === 401 ? "" : (e.detail || e.message));
+    // **不要按 status 一刀切吞掉 detail**：两种 401 的含义完全不同——「没登录」
+    // 是正常状态（空账户，静默出登录框），而「access code 不对」必须原样显示，
+    // 否则登录框里不会出现访问码输入框，用户填完用户名密码提交必然又被挡在
+    // 访问码这一关，只能看见一句没头没尾的「access code 不对」。
+    const detail = e.detail || e.message || "";
+    renderLogin(detail === "没登录" ? "" : detail);
     onAuth(false);
   }
   return root();

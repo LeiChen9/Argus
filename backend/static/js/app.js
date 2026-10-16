@@ -32,10 +32,11 @@ whenUnauthorized(() => { go("me"); loadMe(); });
 // 登录闸门：没登录时只留 Me 页（登录/注册），登录后把 tabbar 和其它 tab 放回来。
 // 每个请求返回的也是数据，一屏全灰比一个登录框更让人困惑。
 const bar = document.getElementById("tabbar");
-onAuthChange((loggedIn) => {
+const applyGate = (loggedIn) => {
   for (const tab of document.querySelectorAll(".tab")) tab.hidden = !loggedIn && tab.dataset.view !== "me";
   bar.hidden = !loggedIn;
-});
+};
+onAuthChange(applyGate);
 
 for (const tab of document.querySelectorAll(".tab")) {
   tab.addEventListener("click", () => {
@@ -49,10 +50,11 @@ for (const tab of document.querySelectorAll(".tab")) {
 }
 
 // 进站先认一下身份：没登录就把人落在 Me 页。
-// 再调一次 onAuthChange(false)：go() 会把 tabbar 放回来，登录闸门得再压一次。
+// 顺序有讲究：先 go("me")（它会把 tabbar 放回来），再 applyGate(false) 压回去——
+// 反过来的话 tabbar 会留在屏幕上。
 loadMe().then((box) => {
   if (box.querySelector(".meform")) {
     go("me");
-    onAuthChange(false);
+    applyGate(false);
   }
 });

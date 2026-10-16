@@ -53,7 +53,10 @@ api("/api/persona")
   .then((res) => res.json())
   .then((data) => {
     if (Object.keys(data).length === 0) show(row("them", NO_RESUME_GREETING));
-  });
+  })
+  // 未登录（401）时这条必然失败，不接住的话控制台会挂一条未处理的 rejection。
+  // 这条只是开场白，取不到就算了——登录状态由 app.js 的闸门管。
+  .catch(() => {});
 
 // 等待 LLM 时 Argus 先"打字"：一个 them 气泡，里面三点跳。
 const showTyping = () => {

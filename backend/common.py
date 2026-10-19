@@ -80,6 +80,15 @@ def agnes_client() -> OpenAI:
 
 
 @cache
+def kilo_client() -> OpenAI:
+    """Kilo 网关免费端点。"""
+    from openai import OpenAI
+
+    ep = ENDPOINTS["kilo"]
+    return OpenAI(api_key=read_env_key(ep["key"]), base_url=ep["base_url"])
+
+
+@cache
 def groq_client() -> OpenAI:
     """Groq 免费端点。本地直连会被 403，离线脚本记得走系统代理。"""
     from openai import OpenAI
@@ -100,6 +109,7 @@ ENDPOINTS = {
     "gemini": {"base_url": GEMINI_BASE_URL, "key": "gemini_apiKey", "env": "GEMINI_API_KEY"},
     "deepseek": {"base_url": "https://api.deepseek.com/v1/", "key": "deepseek_apiKey", "env": "DEEPSEEK_API_KEY"},
     "agnes": {"base_url": "https://apihub.agnes-ai.com/v1/", "key": "agnes_apiKey", "env": "AGNES_API_KEY"},
+    "kilo": {"base_url": "https://ai-gateway.kilo.ai/api/v1/", "key": "kilo_apiKey", "env": "KILO_API_KEY"},
     "groq": {"base_url": "https://api.groq.com/openai/v1/", "key": "groq_apiKey", "env": "GROQ_API_KEY"},
 }
 
@@ -154,8 +164,12 @@ def deepseek_open(now: datetime | None = None) -> bool:
 # 2026-10-16 清出两个死条目（线上实测）：nemotron 100% 挂请求（收了不吐字节，
 # 每步白等 20s 超时）；ling 在 kilo 上已成付费模型（402 Credits Required）。
 # 链从 8 条缩到 6 条，每一步的失败成本从 ~21s 降到毫秒级。
+# 2026-10-19 重新接入 kilo 的两个免费模型（实测工具调用/流式均正常）。
 MODEL_CHAIN = [
     {"name": "agnes-3.0-flash", "endpoint": "agnes"},
+    {"name": "minimax/minimax-m3.1-flash:free", "endpoint": "kilo"},
+    {"name": "nvidia/nemotron-3-super-120b-a12b:free", "endpoint": "kilo"},
+    {"name": "poolside/laguna-s-2.1:free", "endpoint": "kilo"},
     {"name": "openai/gpt-oss-120b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
     {"name": "openai/gpt-oss-20b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
     {"name": "qwen/qwen3.8-27b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
@@ -167,7 +181,7 @@ MODEL_CHAIN = [
 # chat（带工具的主 agent）走这几家。gpt-oss-120b 实测带 tools 正常（能纯文本回复、
 # 也能正确发起 tool_call），故纳入容灾链；它受 max_input_tokens 闸门约束，上下文超
 # ~7K token 时自动跳过，只有短对话（含首轮）才轮到它。见 _run_chain 的 allow_endpoints。
-CHAT_ENDPOINTS = frozenset({"gemini", "agnes", "groq", "deepseek"})
+CHAT_ENDPOINTS = frozenset({"gemini", "agnes", "kilo", "groq", "deepseek"})
 
 
 # ── Worker 侧 bindings 注入 ───────────────────────────────────────────────
@@ -297,6 +311,7 @@ _SDK_FACTORIES = {
     "gemini": llm_client,
     "deepseek": deepseek_client,
     "agnes": agnes_client,
+    "kilo": kilo_client,
     "groq": groq_client,
 }
 

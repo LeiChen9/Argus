@@ -1,4 +1,4 @@
-/* Resume 页：列表 → 详情（#resume/<career_id>），以及详情里那份亲手改的表单。
+/* Resume 页：列表 → 详情（/resume/<career_id>），以及详情里那份亲手改的表单。
    路由写法照 job.js。
 
    **这页不挂 AI 的评语。** 评语是 Argus 在 Chat 里说的话，已经说过了；这里只放
@@ -12,7 +12,7 @@
    委托，不用给每个输入框绑一遍。ops 攒到提交时才发，连改三个字段算一次改动。 */
 
 import { el } from "./dom.js";
-import { go, back as navBack } from "./nav.js";
+import { go, back as navBack, onLeave } from "./nav.js";
 import { loadIndex, work } from "./resume.js";
 import { api, errNote } from "./api.js";
 
@@ -30,7 +30,7 @@ const row = (entry) => {
   // 只说他自己改过几次——那是他的劳动。AI 的评语不进这页，Chat 里已经说过了。
   if (entry.edits_count) box.append(el("p", "rrow__sub", `改过 ${entry.edits_count} 次`));
   box.addEventListener("click", () => {
-    location.hash = `#resume/${encodeURIComponent(entry.career_id ?? "")}`;
+    openResume(entry.career_id, true);
   });
   return box;
 };
@@ -42,11 +42,6 @@ export const loadResume = () =>
     if (!rows) return note("还没有简历。去 Chat 里说个想投的职能，Argus 就会开始挖你的经历");
     list.replaceChildren(...rows.map(row));
   }).catch((e) => note(errNote(e, "取简历")));
-
-const idFromHash = () => {
-  const m = /^#resume\/(.+)$/.exec(location.hash);
-  return m ? decodeURIComponent(m[1]) : "";
-};
 
 /* ── 详情：用户亲手改 ────────────────────────────────────────────────────────
    卡片平时是**只读**的，右上角一个 Edit 图标；点开才变成输入框，改完点提交。
@@ -414,14 +409,22 @@ const show = async (id) => {
   go("resumedit");
 };
 
-const close = () => {
-  shown = "";
-  // 没提交就退出的，靠 pagehide 那道保险兜底；这里再发一次是双保险。
-  if (editing) flush();
-  // 直接粘链接进来的：hash 还在，清掉，否则下次刷新又会弹回详情页
-  if (location.hash) history.replaceState(null, "", location.pathname + location.search);
-  navBack();
+// 站内点击列表行：压一条历史再渲染，返回键/iPhone 侧滑才对得上。
+export const openResume = (id, push = false) => {
+  if (!id) return;
+  if (push) history.pushState({ view: "resumedit" }, "", `/resume/${encodeURIComponent(id)}`);
+  show(id);
 };
+
+// 离开简历详情（点 logo、后退、换页）时把没提交的改动发出去并清状态。
+onLeave("resumedit", () => {
+  if (editing) flush();
+  editing = null;
+  ops.clear();
+  shown = "";
+});
+
+const close = () => navBack();
 
 export const initResumeDetail = () => {
   // 关标签页 / 切到后台：还在编辑态、没点提交的那批赶紧发出去，否则敲的字白敲。
@@ -429,21 +432,7 @@ export const initResumeDetail = () => {
   addEventListener("pagehide", () => { if (editing) flush(); });
   document.getElementById("resume-back").addEventListener("click", () => {
     // 从站内列表进来的：交给浏览器历史，iPhone 侧滑返回才对得上。
-    if (history.state?.resume) history.back();
+    if (history.state?.view === "resumedit") history.back();
     else close();
   });
-  addEventListener("hashchange", () => {
-    const id = idFromHash();
-    if (id) {
-      // 锚点点击已经压了一条历史，这里只补 state，让返回键知道该往回退。
-      history.replaceState({ resume: id }, "", `#resume/${encodeURIComponent(id)}`);
-      return show(id);
-    }
-    // 同 job.js：岗位详情也用 hash（#job/<id>），那个 handler 比我们先注册、先跑。
-    // 「不是我的 hash」不等于「关闭」，否则被它清掉 hash，这里读到的也是空。
-    if (location.hash) return;
-    close();
-  });
-  const id = idFromHash();
-  if (id) show(id);
 };

@@ -164,6 +164,12 @@ MODEL_CHAIN = [
 ]
 
 
+# chat（带工具的主 agent）只走这几家。链首小模型带 tools 会每步都调工具、四步跑满
+# 落不下正文（tech_doc 实测 126s 空回复）；groq 的 token 上限只适合不带工具的
+# subagent 调用（compact / analyze_jd / 抽 persona）。见 _run_chain 的 allow_endpoints。
+CHAT_ENDPOINTS = frozenset({"gemini", "agnes", "deepseek"})
+
+
 # ── Worker 侧 bindings 注入 ───────────────────────────────────────────────
 # entrypoint_worker 模块加载时注入 self.env（等价物）。Worker 里没有 /session/.env，
 # read_env_key 读不到任何 key，所有 Worker 侧取 key 都走这里。离线永不注入。
@@ -451,7 +457,7 @@ def last_trace() -> list[dict]:
 
 
 async def _run_chain(create, messages: list[dict], *, tools=None, temperature=0.7,
-                     pinned=None, max_tokens=None, on_delta=None) -> dict:
+                     pinned=None, max_tokens=None, on_delta=None, allow_endpoints=None) -> dict:
     """统一 LLM 调用，按 active_chain 顺序故障转移。返回消息内容与实际模型名。
 
     pinned 把指定模型提到链首，**只影响第一次尝试**：它失败仍照常降级到链上其余模型。
@@ -459,6 +465,8 @@ async def _run_chain(create, messages: list[dict], *, tools=None, temperature=0.
     只会产出套话，让容灾链顺序决定这类调用的质量是不合适的。
     """
     chain = active_chain()
+    if allow_endpoints is not None:
+        chain = [i for i in chain if i["endpoint"] in allow_endpoints]
     if pinned:
         # pinned 提到链首并**去重**：MODEL_CHAIN 里本来就有它，不去重的话一轮里
         # 同一个模型会被试两次（pinned 位 + 自然位），失败成本翻倍。
@@ -479,6 +487,9 @@ async def _run_chain(create, messages: list[dict], *, tools=None, temperature=0.
         t0 = time.perf_counter()
         try:
             msg = await create(item, messages, tools, temperature, max_tokens, on_delta)
+            # 200 但既没正文也没工具调用 = 这家给不出东西，按失败降级到链上下一个模型。
+            if not (msg.get("content") or "").strip() and not msg.get("tool_calls"):
+                raise RuntimeError("空响应（无正文、无工具调用）")
             _last_trace.append({"model": model_name, "ms": round((time.perf_counter() - t0) * 1000), "ok": True})
             _note_usage(model_name, msg.get("usage"), tokens, len(msg.get("content") or ""))
             logger.info(f"使用模型: {model_name}")
@@ -508,17 +519,19 @@ def call_llm_stream(messages: list[dict], on_delta, *, tools=None, temperature=0
 
 
 async def call_llm_async(messages: list[dict], *, tools=None, temperature=0.7,
-                         pinned=None, max_tokens=None) -> dict:
+                         pinned=None, max_tokens=None, allow_endpoints=None) -> dict:
     """Worker 入口：fetch 传输。chat 上 Worker 时换这个（C2）。"""
     return await _run_chain(_fetch_create, messages, tools=tools,
-                            temperature=temperature, pinned=pinned, max_tokens=max_tokens)
+                            temperature=temperature, pinned=pinned, max_tokens=max_tokens,
+                            allow_endpoints=allow_endpoints)
 
 
 async def call_llm_stream_async(messages: list[dict], on_delta, *, tools=None, temperature=0.7,
-                                pinned=None, max_tokens=None) -> dict:
+                                pinned=None, max_tokens=None, allow_endpoints=None) -> dict:
     """Worker 流式入口：fetch 传输，语义同 call_llm_async。"""
     return await _run_chain(_fetch_create, messages, tools=tools, temperature=temperature,
-                            pinned=pinned, max_tokens=max_tokens, on_delta=on_delta)
+                            pinned=pinned, max_tokens=max_tokens, on_delta=on_delta,
+                            allow_endpoints=allow_endpoints)
 
 
 def ask_json(prompt: str, blocks: list[str], temperature: float = 0.7,

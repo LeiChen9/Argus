@@ -497,3 +497,44 @@ KV 是免费额度内唯一能消除重新部署的路径。
   `zone:read`，无 `zone:delete`，API 删不掉（9109），需手动在 dashboard 删
 - KV 是最终一致，刚写完有几秒读到旧值。`restart.sh` 末尾重试 8 次 × 4s 兜底，
   实测一次过，弱网下 32s 够不够没验证
+
+## 2026-10-19 — Chat 会话侧栏（多会话 + 删除 + R2）
+
+**做了什么**
+
+chat 之前是「单会话 + 清空」。改成 ChatGPT 式多会话：侧栏列 R2 上真实存在的
+会话，当前看哪个记 localStorage（空会话不落 R2、不进列表）。
+
+- 后端：`sessions.py` 去掉 7 天 TTL，加 `list_all()`（R2 前缀列举 + 逐个读，
+  内存兜底）与 `delete()`；`chat.py` 删 `clear()`、加首轮标题生成（groq
+  `openai/gpt-oss-20b`，失败退回首条用户消息截断）与 `session_list`/`delete_session`；
+  `api_chat.py` 加 `GET /api/chat/sessions`、`POST /api/chat/delete`（body `{"sid"}`），
+  删 `/api/chat/clear` 及其路由。
+- 前端：侧栏（手机滑出抽屉 / 桌面常驻可折叠，`@media 768px` 用 `.app` 左内边距
+  顶开内容）；topbar 垃圾桶改「新建会话」，垃圾桶下沉到会话行；删除走**乐观移除
+  + 5s 撤销**。
+- 性能：`entrypoint_worker` 加 `NO_STORE_PATHS`——会话列表/删除/历史等只读会话
+  对象的端点跳过每请求的 `_refresh()` 全量 store 拉取。
+
+**本次提交还带上了工作区里此前未提交的一版改动**：详情页真路径路由（`/job/<id>`、
+`/resume/<id>`，`pushState`）、去 Me 页自检 UI、`readJson` + api 冷启动重试、
+`CHAT_ENDPOINTS` + `allow_endpoints`、空响应降级。`common.py` 的 `allow_endpoints`
+与 `chat.py` 是耦合的，拆开提交中间态编不过，故合为一版；`tech_doc.md` 里过时的
+hash 路由描述、`wrangler.jsonc` 注释一并对齐。
+
+**验证**
+
+- `py_compile` + `import chat`：通过；`sessions.list_all/delete` 离线功能测试通过
+- `node --check`（chat.js / nav.js / app.js）、`wrangler deploy --dry-run`：通过
+- 已部署线上（版本 `b96d6cb0`），用户实测通过
+
+**决定**
+
+- 会话**没有 TTL**：可见、可删的东西就该一直在，静默过期反而是数据丢失
+- 删除不弹阻塞确认，改乐观移除 + 5s 撤销——误触靠撤销兜，比逐字确认便宜
+- 标题生成是「不带工具的 subagent 调用」，pin groq（`CHAT_ENDPOINTS` 特意把它
+  排除在带工具的主 agent 之外）
+
+**未完成**
+
+- 删除/切会话的剩余延迟来自 pyodide 冷启动（免费档），客户端只能靠乐观更新兜

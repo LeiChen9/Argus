@@ -58,16 +58,6 @@ def current_user() -> str:
     return _USER
 
 
-def store_keys() -> list[str]:
-    """当前 store 里的全部 key。排障用：store 空、或 key 拼错，都靠它一眼看出来。"""
-    return list(_store)
-
-
-def store_key(path) -> str | None:
-    """_store_key 的公开版，给排障输出用（省得外部去碰私有名）。"""
-    return _store_key(Path(path))
-
-
 def user_prefix() -> str:
     """R2 上该用户的命名空间。空用户返回空串，key 保持原样。"""
     return f"{_USER}/" if _USER else ""

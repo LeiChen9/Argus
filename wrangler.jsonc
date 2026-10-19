@@ -6,7 +6,8 @@
 
   // 前端随 Worker 一起发，和 /api 同源，不需要 CORS。目录只指 backend/static：
   // 指向仓库根会把 .env、data/、persona.json 一起传上去。
-  // SPA 回退：未命中的非 /api 路径都回 index.html（前端是 hash 路由）。
+  // SPA 回退：未命中的非 /api 路径都回 index.html（前端走真路径 pushState，
+  // 直接粘 /chat、/job/<id> 也能直达，靠这条回退把骨架交出去）。
   "assets": {
     "directory": "./backend/static",
     "binding": "ASSETS",

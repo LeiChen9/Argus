@@ -241,9 +241,10 @@ button { font: inherit; color: inherit; }
 
 /* ── 首页导航中枢 ── */
 .view--home {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  align-items: center;
+  justify-items: center;
   gap: 22px;
   padding: 16px 20px 24px;
   overflow-y: auto;
@@ -619,29 +620,34 @@ button { font: inherit; color: inherit; }
      ——手机端尤其明显。line-height: 0 + svg display:block 把基线彻底去掉，
      剩下的居中就只由 flex 决定，跨引擎一致。 */
   line-height: 0;
+  padding: 0;
   border: 0;
   border-radius: 19px;
   background: var(--glow);
   color: var(--accent);
   cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
   -webkit-tap-highlight-color: transparent;
 }
 
 .icon-btn:active { opacity: .7; }
-.icon-btn svg { display: block; width: 28px; height: 28px; }
+.icon-btn svg { display: block; width: 18px; height: 18px; }
 
 .icon-btn--send {
+  width: auto;
+  padding: 0 18px;
+  border-radius: 999px;
   background: var(--accent);
   color: var(--on-accent);
+  font-size: 15px;
+  font-weight: 600;
 }
 
-/* 同一颗按钮两副面孔：默认是箭头，等模型时换成方块（停止）。 */
-/* 选择器必须带上 svg：上面的 `.icon-btn svg { display: block }` 是 (0,1,1)，
-   比这里的类选择器 (0,1,0) 更具体，会盖掉 display:none，两个图标就并排显示
-   ——箭头被挤偏 6.5px，实测就是这么发现的。 */
-svg.icon-btn__stop { display: none; }
-.icon-btn--busy svg.icon-btn__stop { display: block; }
-.icon-btn--busy svg.icon-btn__send-arrow { display: none; }
+/* 「发送」/「停止」两副面孔。用 ::after 而不是往 DOM 里塞两个 svg：文字切换没有
+   布局位移，chat.js 的 setBusy 也不用跟着改。 */
+.icon-btn--send::after { content: "发送"; }
+.icon-btn--busy::after { content: "停止"; }
 
 /* 用户自己刚发出去、还没等到回答的那条：可点开改。加一点点可点的暗示，
    不做成一个常驻按钮——改自己上一句话是低频动作，不该在气泡上挂常驻控件。 */
@@ -1512,6 +1518,158 @@ details[open] > .ai__sum .ai__chev { transform: rotate(-135deg) translate(-2px, 
 .meusage__model { font-size: 14px; font-weight: 600; color: var(--ink); }
 .meusage__nums { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12.5px; color: var(--ink-3); }
 
+/* ── 会话侧栏 ──
+   手机：fixed 抽屉从左侧滑出、盖住内容，配一层半透明遮罩（点它收起）。
+   桌面（≥768px）：常驻左栏，展开时给 .app 加左内边距把内容顶开（侧栏 fixed
+   在左、不受 padding 影响），收起则滑回屏幕外。开合都归 .app.side-open 一个类。 */
+.side {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 272px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: var(--bar-bg);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  border-right: 0.5px solid var(--hairline);
+  transform: translateX(-100%);
+  transition: transform 280ms var(--soft);
+}
+.app.side-open .side { transform: none; }
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  background: rgba(28, 28, 30, 0.28);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 280ms var(--soft);
+}
+.app.side-open .scrim { opacity: 1; pointer-events: auto; }
+
+.side__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 52px;
+  padding: 0 8px 0 16px;
+}
+.side__title { flex: 1 1 auto; font-size: 15.5px; font-weight: 700; color: var(--ink); }
+.side__close {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: var(--ink-3);
+  border-radius: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.side__close svg { width: 19px; height: 19px; }
+.side__close:active { background: rgba(74, 62, 50, 0.12); }
+
+.side__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px 14px;
+}
+.side__empty { margin: 10px 6px; font-size: 14px; color: var(--ink-3); }
+
+.side__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 2px 1px 10px;
+  border-radius: 11px;
+}
+.side__item.is-current { background: rgba(139, 111, 71, 0.13); }
+
+.side__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 9px 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  font-size: 14.5px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.side__time { flex: 0 0 auto; font-size: 11.5px; color: var(--ink-3); }
+.side__del {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: var(--ink-3);
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.side__del svg { width: 17px; height: 17px; }
+.side__del:active { background: rgba(74, 62, 50, 0.12); }
+
+@media (min-width: 768px) {
+  .app { transition: padding-left 280ms var(--soft); }
+  .app.side-open { padding-left: 272px; }
+  .scrim { display: none; }
+  .side__del { opacity: 0; }
+  .side__item:hover .side__del,
+  .side__del:focus-visible { opacity: 1; }
+}
+
+/* ── 底部提示：删除的即时反馈 + 撤销 ── */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px 10px 18px;
+  border-radius: 14px;
+  background: rgba(28, 28, 30, 0.92);
+  color: #fff;
+  font-size: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+  transform: translate(-50%, 16px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms var(--soft), transform 240ms var(--spring);
+}
+.toast--show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.toast__undo {
+  border: 0;
+  padding: 2px 4px;
+  background: none;
+  color: #ffd9a0;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.toast__undo:active { opacity: .6; }
+
 /* ── Reduced motion ── */
 @media (prefers-reduced-motion: reduce) {
   .hero::before,
@@ -1525,4 +1683,5 @@ details[open] > .ai__sum .ai__chev { transform: rotate(-135deg) translate(-2px, 
     animation: none !important;
   }
   .ai__chev { transition: none !important; }
+  .side, .scrim, .app, .toast { transition: none !important; }
 }

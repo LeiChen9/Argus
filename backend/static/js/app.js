@@ -1,9 +1,9 @@
 import { greeting } from "./greeting.js";
-import { go } from "./nav.js";
+import { go, route, routeId, onRouteChange } from "./nav.js";
 import { loadJobs } from "./jobs.js";
 import { loadCareer } from "./career.js";
-import { initJobDetail } from "./job.js";
-import { loadResume, initResumeDetail } from "./resumepage.js";
+import { initJobDetail, openJob } from "./job.js";
+import { loadResume, initResumeDetail, openResume } from "./resumepage.js";
 import { loadMe, onAuthChange } from "./me.js";
 import { whenUnauthorized } from "./api.js";
 import "./chat.js";
@@ -43,7 +43,13 @@ const enter = (view) => {
   if (view === "jobs") loadJobs();
   if (view === "career") loadCareer();
   if (view === "me") loadMe();
+  // 详情页：路径里的 id 决定渲染谁。
+  if (view === "job") openJob(routeId());
+  if (view === "resumedit") openResume(routeId());
 };
+
+// 浏览器前进/后退换了路径：按路径切页（用户手改地址栏也走这里）。
+onRouteChange(enter);
 
 for (const item of document.querySelectorAll(".homenav__item")) {
   item.addEventListener("click", () => enter(item.dataset.view));
@@ -52,8 +58,8 @@ for (const item of document.querySelectorAll(".homenav__item")) {
 // 顶部固定 logo：任何页面点它都回首页。
 document.getElementById("toplogo").addEventListener("click", () => go("home"));
 
-// 进站先认一下身份：没登录就落在 Me 页；**已经登录的别把人扣在 Me 页**——
-// 底部栏去掉了，从那儿再点一次 logo 才能回首页，等于登录完先迷路一下。
+// 进站先认一下身份：按地址栏路径落到对应页面（拿来就能直达 /chat、/jobs…），
+// 没登录的一律被 enter 的闸门送去 Me 页。
 loadMe().then((box) => {
-  go(box.querySelector(".meform") ? "me" : "home");
+  enter(route() || (box.querySelector(".meform") ? "me" : "home"));
 });

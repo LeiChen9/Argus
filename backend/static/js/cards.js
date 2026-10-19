@@ -1,14 +1,16 @@
 /* 岗位卡片组件：Chat 横滑轨道与 Jobs 页网格共用。
-   卡片是站内 hash 锚点（#job/<id>），不是外链——投递才是唯一离开本站的动作。
+   卡片是站内真路径（/job/<id>），不是外链——投递才是唯一离开本站的动作。
    渲染时顺手把 job 交给详情页存着，省掉详情页为 chat 当轮的岗位再发一次请求。 */
 
-import { remember, SOURCE } from "./job.js";
+import { remember, SOURCE, openJob } from "./job.js";
 
 export const jobCard = (job) => {
   remember(job);
   const a = document.createElement("a");
   a.className = "jobcard";
-  a.href = `#job/${encodeURIComponent(job.id ?? "")}`;
+  a.href = `/job/${encodeURIComponent(job.id ?? "")}`;
+  // 站内走 pushState，别整页刷新；href 留着供复制链接/新标签打开。
+  a.addEventListener("click", (e) => { e.preventDefault(); openJob(job.id, true); });
   a.innerHTML =
     '<div class="jobcard__top"><span class="jobcard__title"></span><span class="jobcard__salary"></span></div>' +
     '<p class="jobcard__company"></p><p class="jobcard__meta"></p><p class="jobcard__foot"></p>';

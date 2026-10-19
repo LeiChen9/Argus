@@ -78,6 +78,14 @@ PROBE_KEY = "_spike/probe.json"
 STORE_KEYS = ("careers.json", "boss_jobs.json", "persona.json")
 RESUME_PREFIX = "resumes/"
 
+# 这几个 chat 端点只读会话对象（chat_sessions/），不碰任何数据文件——_refresh
+# 拉的那一轮全量 store 对它们纯属白等。每请求少一次 list + 全量 get，切会话、
+# 删会话、拉历史都明显更快。带模型/工具的 /api/chat、/api/chat/stream 仍要 store。
+NO_STORE_PATHS = frozenset({
+    "/api/chat/sessions", "/api/chat/delete",
+    "/api/chat/history", "/api/chat/messages", "/api/chat/undo",
+})
+
 
 def _ms(t0: float) -> float:
     # pyodide 的 time.perf_counter 精度不够（亚毫秒步进全是 0.0），改用 JS 的
@@ -133,6 +141,11 @@ async def _resolve_user(request) -> str:
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
         path = urlparse(request.url).path
+        # 非接口路径一律交给静态资源：/chat、/me 这些前端路径靠 assets 的
+        # not_found_handling=single-page-application 回 index.html。不加这道，
+        # 未登录时它们会先撞上下面的 401，SPA 回退永远轮不到。
+        if not path.startswith("/api/"):
+            return await self.env.ASSETS.fetch(request)
         if path == "/api/ping":
             return _no_store(await self._ping(request))
         if path == "/api/debug/llm":
@@ -153,7 +166,8 @@ class Default(WorkerEntrypoint):
             return _no_store(Response.json({"detail": "没登录"}, status=401))
         utils.bind_user(user)
         if path.startswith("/api/"):
-            await self._refresh()
+            if path not in NO_STORE_PATHS:
+                await self._refresh()
             if path.startswith("/api/chat"):
                 try:
                     return _no_store(await api_chat.dispatch(path, request))

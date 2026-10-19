@@ -15,7 +15,10 @@ import logging
 
 import common
 from common import GEMINI_MODEL, render_markdown, call_llm_async, call_llm_stream_async
-from sessions import load as _load_session, save as _save_session
+from sessions import (
+    load as _load_session, save as _save_session,
+    list_all as _list_sessions, delete as _delete_session,
+)
 from utils import load_file
 from tools import (
     auto_compact, read_persona, read_careers,
@@ -152,6 +155,12 @@ RESUME_TOOLS = {
     "critique_resume": critique_resume,
 }
 
+# 起标题是一类典型的 subagent 调用：不带工具、输入短、只要一行结果。groq 的
+# 小模型正合适（CHAT_ENDPOINTS 特意把 groq 排除在带工具的主 agent 之外）。
+# pinned 只影响首次尝试，挂了照常降级；整条链都挂就退回截断。
+TITLE_MODEL = "openai/gpt-oss-20b"
+TITLE_PROMPT = "用不超过 12 个字概括下面这条用户消息在聊什么，作为对话标题。只输出标题本身，不要引号、不要解释。"
+
 MAX_TOOL_STEPS = 4
 
 
@@ -206,9 +215,11 @@ async def answer(sid: str, message: str, on_delta=None) -> dict:
     pin = GEMINI_MODEL
     for _ in range(MAX_TOOL_STEPS):
         if on_delta is not None:
-            msg = await call_llm_stream_async(messages, on_delta, tools=TOOLS, max_tokens=4096, pinned=pin)
+            msg = await call_llm_stream_async(messages, on_delta, tools=TOOLS, max_tokens=4096,
+                                              pinned=pin, allow_endpoints=common.CHAT_ENDPOINTS)
         else:
-            msg = await call_llm_async(messages, tools=TOOLS, max_tokens=4096, pinned=pin)
+            msg = await call_llm_async(messages, tools=TOOLS, max_tokens=4096,
+                                       pinned=pin, allow_endpoints=common.CHAT_ENDPOINTS)
         if not msg["tool_calls"]:
             return await _finish(sid, message, msg, cards)
         pin = msg["model"]
@@ -241,8 +252,14 @@ async def _finish(sid: str, message: str, msg: dict, cards: list | None) -> dict
     """把这一轮落进会话并拼出响应。落盘在拼响应之前，响应丢了也还能捞回来。"""
     sess = await _load_session(sid)
     reply = msg["content"] or ""
+    # 工具四步跑满仍没正文时 msg 里有 tool_calls、正文为空——不能把空回复落盘给用户。
+    if not reply.strip():
+        raise RuntimeError("模型没产出正文")
     sess["history"].append({"role": "user", "content": message})
     sess["history"].append({"role": "assistant", "content": reply})
+    # 首轮起个标题（只有还没有 title 时）。放在落盘前，和这一轮一起写下去。
+    if not sess.get("title"):
+        sess["title"] = await _make_title(sess)
     await _save_session(sid, sess)
     await common.flush_usage()  # 一轮结束才落一次用量账本（Me 页看）
     resp = {"reply": render_markdown(reply), "model": msg["model"]}
@@ -254,14 +271,32 @@ async def _finish(sid: str, message: str, msg: dict, cards: list | None) -> dict
     return resp
 
 
-async def clear(sid: str) -> dict:
-    sess = await _load_session(sid)
-    n = len(sess["history"])
-    sess["history"].clear()
-    mode = sess["resume_career"]
-    sess["resume_career"] = None
-    await _save_session(sid, sess)
-    return {"cleared": n, "resume_career": mode}
+async def _make_title(sess: dict) -> str:
+    """首轮给会话起标题。groq 小模型（见 TITLE_MODEL）；起不出来就退回首条
+    用户消息截断——标题是锦上添花，绝不能让它拖垮这一轮。"""
+    text = next((m["content"] for m in sess["history"] if m["role"] == "user"), "").strip()
+    if not text:
+        return "新对话"
+    try:
+        msg = await call_llm_async(
+            [{"role": "user", "content": TITLE_PROMPT},
+             {"role": "user", "content": text[:500]}],
+            temperature=0.2, max_tokens=32, pinned=TITLE_MODEL)
+        title = (msg["content"] or "").strip().strip("「」“”\"'").splitlines()[0][:20]
+    except Exception as e:
+        logger.warning("起标题失败，用截断兜底：%s", e)
+        title = ""
+    return title or text[:20]
+
+
+async def session_list() -> dict:
+    """侧栏用：当前用户的会话摘要列表。"""
+    return {"sessions": await _list_sessions()}
+
+
+async def delete_session(sid: str) -> dict:
+    await _delete_session(sid)
+    return {"deleted": sid}
 
 
 async def undo(sid: str) -> dict:
@@ -294,6 +329,18 @@ async def history(sid: str) -> dict:
     if len(h) < 2:
         return {"turn": None}
     return {"turn": {"user": h[-2]["content"], "reply": render_markdown(h[-1]["content"])}}
+
+
+async def full_history(sid: str) -> dict:
+    """整段会话，供刷新后重建对话界面。assistant 出渲染好的 HTML，user 出原文。"""
+    h = (await _load_session(sid))["history"]
+    out = []
+    for m in h:
+        if m["role"] == "assistant":
+            out.append({"role": "assistant", "html": render_markdown(m["content"])})
+        else:
+            out.append({"role": "user", "content": m["content"]})
+    return {"messages": out}
 
 
 async def _resume_card(sid: str) -> dict | None:

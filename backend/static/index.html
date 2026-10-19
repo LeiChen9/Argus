@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+<base href="/">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light">
@@ -8,7 +9,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>Argus</title>
-<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/app.css?v=20261019b">
 </head>
 <body>
 <div class="app">
@@ -17,17 +18,35 @@
        左边是 Argus 的头像（点它回首页，这是全局唯一的回首页入口），中间名字，
        右边放当前页面的操作（只有 chat 有「清空对话」）。 ── -->
   <header class="topbar" id="topbar">
+    <button class="topbar__act" id="chat-menu" type="button" aria-label="会话列表" hidden>
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+      </svg>
+    </button>
     <button class="topbar__logo" id="toplogo" type="button" aria-label="回首页">
       <img src="assets/argus-anime.webp" width="1024" height="1024" alt="">
     </button>
     <span class="topbar__name">Argus</span>
-    <button class="topbar__act" id="chat-clear" type="button" aria-label="清空对话上下文" hidden>
+    <button class="topbar__act" id="chat-new" type="button" aria-label="新建会话" hidden>
       <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M4.5 7h15M9.5 7V5.6A1.6 1.6 0 0 1 11.1 4h1.8a1.6 1.6 0 0 1 1.6 1.6V7M6.8 7l.7 11.3A2 2 0 0 0 9.5 20.1h5a2 2 0 0 0 2-1.8L17.2 7"
-              stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
       </svg>
     </button>
   </header>
+
+  <!-- ── 会话侧栏：手机是滑出抽屉，桌面（≥768px）是常驻可折叠左栏 ── -->
+  <aside class="side" id="side" aria-label="会话列表">
+    <div class="side__head">
+      <span class="side__title">对话</span>
+      <button class="side__close" id="side-close" type="button" aria-label="收起">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+    <div class="side__list" id="side-list"></div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
 
   <main class="stage">
 
@@ -96,20 +115,13 @@
             <input type="file" id="file" accept=".txt,.md,text/plain,text/markdown" hidden>
             <button class="icon-btn" id="attach" type="button" aria-label="上传 txt 或 md">
               <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M12 4.8v14.4M4.8 12h14.4" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+                <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
+                      stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </button>
             <textarea class="composer__input" id="input" rows="1" autocomplete="off" placeholder="说说你的经历…"></textarea>
             <button class="icon-btn icon-btn--send" id="send" type="submit" aria-label="发送">
-              <!-- 同一颗按钮两副面孔：默认箭头，等模型时换成方块（停止）。两个 svg
-                   都在 DOM 里，用 CSS 切换，省掉一次 innerHTML 重绘。 -->
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" class="icon-btn__send-arrow">
-                <path d="M4 12h15M11.5 4.8l7.2 7.2-7.2 7.2" stroke="currentColor" stroke-width="2.6"
-                      stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" class="icon-btn__stop">
-                <rect x="5.5" y="5.5" width="13" height="13" rx="2.5" fill="currentColor"/>
-              </svg>
+              <!-- 文字由 CSS ::after 渲染，chat.js 的 setBusy 只切 .icon-btn--busy。 -->
             </button>
           </div>
         </form>
@@ -125,7 +137,7 @@
       </div>
     </section>
 
-    <!-- ── 简历详情：hash 路由 #resume/<career_id> ── -->
+    <!-- ── 简历详情：真路径 /resume/<career_id> ── -->
     <section class="view view--resumedit" id="view-resumedit" hidden>
       <div class="jdetail">
         <header class="jdetail__head">
@@ -149,7 +161,7 @@
       </div>
     </section>
 
-    <!-- ── 岗位详情：卡片点进来，hash 路由 #job/<id> ── -->
+    <!-- ── 岗位详情：卡片点进来，真路径 /job/<id> ── -->
     <section class="view view--job" id="view-job" hidden>
       <div class="jdetail">
         <header class="jdetail__head">

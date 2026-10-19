@@ -67,7 +67,7 @@ backend/
   api_read.py                  只读 API：jobs / careers / persona / me / resumes
   api_chat.py                  chat HTTP 层：四端点、SSE（TransformStream + 5s 心跳）
   api_write.py                 写路径：persona 上传/意向、resume 手改
-  sessions.py                  会话存取：R2 chat_sessions/{sid}.json + 7 天 TTL
+  sessions.py                  会话存取：R2 chat_sessions/{sid}.json（无 TTL，用户自删）
   chat.py                      Agent 循环、工具注册表、system prompt 拼装
   tools.py                     Agent 工具实现：只读工具、analyze_jd、auto_compact
   jobs.py                      岗位领域：normalize、save_snapshot、job_cards、career_documents
@@ -204,9 +204,9 @@ Career 上限 3 个（`build_careers.py::MAX_CAREERS`）：招聘平台只让留
   token 估算用字符启发式（tiktoken 有 Rust 扩展装不了）：西文 4 字符/token、
   CJK 1 字/token，刻意高估。Gemini 3 多轮工具调用必须原样回带 tool_calls 的
   `thought_signature`，重建三件套会 400。
-- **session 落 R2**：`sessions.py`，`chat_sessions/{sid}.json`，7 天 TTL
-  读时懒删。免费档请求散在多个边缘节点，内存会话十次有九次恢复不到——
-  这就是它必须在 R2 的原因。
+- **session 落 R2**：`sessions.py`，`chat_sessions/{sid}.json`，**没有 TTL**——
+  会话是侧栏里看得见、能自己删的东西，静默过期反而是数据丢失。免费档请求散在
+  多个边缘节点，内存会话十次有九次恢复不到——这就是它必须在 R2 的原因。
 - **Python 依赖** vendor 在 `python_modules/`（workers-py SDK + chinese-calendar
   + markdown-it-py，`uv pip install --target`，gitignore，换机器要重建）。不用
   requirements.txt：远端运行时会用 site-packages 的 workers shim 盖回去。
@@ -231,7 +231,8 @@ Career 上限 3 个（`build_careers.py::MAX_CAREERS`）：招聘平台只让留
 
 卡片点开进站内详情页，投递才是唯一离开本站的动作。
 
-- **卡片仍是 `<a>`，`href` 是站内 hash `#job/<id>`**，不是外链。所以 `.jobcard` 样式
+- **卡片仍是 `<a>`，`href` 是站内真路径 `/job/<id>`**，不是外链（复制链接/新标签打开
+  都走得了）。点击时 `preventDefault` + `pushState`，不整页刷新。所以 `.jobcard` 样式
   一行没动，长按/右键行为照旧
 - **岗位本体不需要新后端接口**：`jd` 全文一直存在 `data/boss_jobs.json` 里，`/api/jobs`
   本来就全量返回。`cards.js` 渲染时顺手 `remember(job)` 存进内存，深链接直接命中，
@@ -330,10 +331,12 @@ Career 上限 3 个（`build_careers.py::MAX_CAREERS`）：招聘平台只让留
 ### 三个决定
 
 - **Career 内岗位复用 `cards.js` 的 `jobCards()`**，零新组件。`jobCard()` 内部会
-  `remember(job)`，所以在 Career 页点卡片进 `#job/<id>` 后，`job.js` 的详情页直接
+  `remember(job)`，所以在 Career 页点卡片进 `/job/<id>` 后，`job.js` 的详情页直接
   命中内存，返回时 `nav.js` 的 `last` 记住来源是 `career`，往返正常
-- **不做 hash 路由**。Career 只有一层，六张卡一屏装得下，加 `#career/<id>` 只会多一套
-  返回栈和一份导航状态——`nav.js` 的沉浸式分支（`chat` / `job`）也跟着变复杂。
+- **详情页走真路径，Career 本身没有独立路由**。细节页（`/job/<id>`、`/resume/<id>`）
+  用 `pushState`，浏览器返回/刷新/直达都走得通；Career 只有一层，六张卡一屏装得下，
+  不为它单开一条 `/career/<id>`——那只会多一套返回栈和一份导航状态，
+  `nav.js` 的沉浸式分支（`chat` / `job`）也跟着变复杂。
   折叠用 `dom.js` 的 `fold()`（原生 `<details>`），键盘和读屏免费
 - **接口放在 `jobs.py` 而非新建 `careers.py`**：路由已在 `main.py` 注册好，
   `data/careers.json` 本就是岗位侧产物，归 jobs 域说得通
@@ -342,7 +345,7 @@ Career 上限 3 个（`build_careers.py::MAX_CAREERS`）：招聘平台只让留
 
 `careers[].jobs[]` 里只有 `job_id / company / title / belongs_note`，**缺
 `salary` / `location` / `source` / `collected_at`**，直接喂 `jobCard()` 会得到空薪资、
-空 meta、`href` 变成 `#job/`。`/api/careers` 因此按 id 回填 `boss_jobs` 的完整岗位：
+空 meta、`href` 变成 `/job/`。`/api/careers` 因此按 id 回填 `boss_jobs` 的完整岗位：
 
 ```python
 {**j, **jobs.get(j["job_id"], {}), "id": j["job_id"]}
@@ -420,8 +423,21 @@ Chat 是主 Agent loop：system prompt 里只有工具说明，**所有事实都
   陈述（persona 里没有、只存在于对话里的信息）、已确认的结论。
 - 只动内存不落盘，与既有语义一致（重启即丢）。
 
-另有 `POST /api/chat/clear` 与 Chat 头部的清空按钮，给用户一个「说错了，重来」
-的动作，**不做二次确认**——自用工具，清错重来一遍的成本远低于点确认的摩擦。
+会话列表走 `GET /api/chat/sessions`（当前用户 R2 前缀下所有会话摘要，标题 +
+更新时间倒序，见 `sessions.list_all`），删除走 `POST /api/chat/delete`
+（body `{"sid"}`，同步删 R2 对象）。前端侧栏每行一个垃圾桶：
+- **乐观移除 + 可撤销**。点垃圾桶立刻从列表移除（不等后端），真正的 R2 删除延后
+  5s，期间底部弹「已删除 · 撤销」。不弹阻塞式二次确认——误触靠撤销兜，逐字敲
+  「确认」的摩擦只为 5s 内点一下「撤销」的极小概率买单不值得。之所以必须乐观，
+  是因为 Worker 每请求都要付 pyodide 冷启动 + 一轮全量 `_refresh()`，等后端返回再
+  更新界面会像卡死。
+- **这几个 chat 端点跳过 `_refresh()`**（`entrypoint_worker.NO_STORE_PATHS`）：
+  `sessions`/`delete`/`history`/`messages`/`undo` 只读 `chat_sessions/` 下的会话
+  对象，不碰任何数据文件，灌 store 纯属白等；带模型/工具的 `/api/chat`、
+  `/api/chat/stream` 才需要。
+- 首轮落盘时用 groq 小模型（`openai/gpt-oss-20b`，不带工具的 subagent 调用）
+  给会话起个标题，失败退回首条用户消息截断。会话**没有 TTL**：可见、可删的东西
+  就该一直在，静默过期反而是数据丢失。
 
 ### 四个决定
 
@@ -474,7 +490,7 @@ Chat 是主 Agent loop：system prompt 里只有工具说明，**所有事实都
 
 **前端按「谁消费它」拆成两份**，跟 `cards.js` / `job.js` 一个路子：
 - `resume.js`——共享件：Chat 全文卡、Career 软链、索引拉取（`loadIndex`）、只读渲染（`work`）
-- `resumepage.js`——Resume 页：列表、详情、编辑器、hash 路由
+- `resumepage.js`——Resume 页：列表、详情、编辑器、真路径路由（`/resume/<id>`）
 
 ### 约定
 

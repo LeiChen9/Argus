@@ -8,8 +8,9 @@
 isolate、各存一份会话——history 恢复十条里九条落空。落 R2 后读写都过同
 一个 bucket，isolate 回收也不再丢历史。
 
-TTL 与从前一致（7 天），读时懒删：过期会话当新的用，顺手删旧对象，
-不养 cron。单用户场景，同 sid 并发读改写竞争理论上存在、实际不可达——
+**没有 TTL**：会话是用户看得见、自己能删的东西，就该一直在。从前 7 天懒删
+是因为只有单一会话、没有 prune 手段；现在侧栏给了显式的删除入口，静默过期
+反而成了数据丢失。单用户场景，同 sid 并发读改写竞争理论上存在、实际不可达——
 真出问题那天再上 R2 的条件写（etag）。
 """
 
@@ -17,8 +18,6 @@ import json
 import time
 
 import utils
-
-TTL = 7 * 24 * 3600
 
 _env = None
 _mem: dict[str, dict] = {}
@@ -55,10 +54,44 @@ async def load(sid: str) -> dict:
     except Exception:
         # 读坏了当没有：这一轮对话从头开始，好过让用户对着 500。
         return fresh()
-    if time.time() - s.get("updated_at", 0) > TTL:
-        await _env.DATA.delete(_key(sid))
-        return fresh()
     return s
+
+
+def _summarize(sid: str, sess: dict) -> dict:
+    """会话 → 侧栏行。标题优先取落盘的 title（首轮由 groq 起）；没有就退
+    到首条用户消息截断，连用户消息都没有的空会话叫「新对话」。"""
+    title = (sess.get("title") or "").strip()
+    if not title:
+        first = next((m["content"] for m in sess.get("history", []) if m["role"] == "user"), "")
+        title = first.strip()[:20] or "新对话"
+    return {"sid": sid, "title": title, "updated_at": sess.get("updated_at", 0)}
+
+
+async def list_all() -> list[dict]:
+    """当前用户的全部会话摘要，按更新时间倒序。Worker 列 R2 前缀下所有对象
+    再逐个读（单个几 KB，量小）；内存兜底遍历字典。"""
+    if _env is None:
+        items = [_summarize(sid, s) for sid, s in _mem.items()]
+    else:
+        from pyodide.ffi import to_js
+        prefix = f"{utils.user_prefix()}chat_sessions/"
+        listed = await _env.DATA.list(to_js({"prefix": prefix}))
+        items = []
+        for obj in listed.objects:
+            text = await (await _env.DATA.get(obj.key)).text()
+            try:
+                sess = json.loads(text)
+            except Exception:
+                continue
+            items.append(_summarize(obj.key[len(prefix):-len(".json")], sess))
+    return sorted(items, key=lambda x: x["updated_at"], reverse=True)
+
+
+async def delete(sid: str) -> None:
+    if _env is None:
+        _mem.pop(sid, None)
+        return
+    await _env.DATA.delete(_key(sid))
 
 
 async def save(sid: str, sess: dict) -> None:

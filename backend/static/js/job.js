@@ -1,11 +1,11 @@
-/* 岗位详情：卡片是 #job/<id> 锚点，这里按 hash 找岗位渲染。
+/* 岗位详情：路径是 /job/<id>，这里按路径找岗位渲染。
    岗位数据来自 /api/jobs 全量返回 + cards 渲染时顺手 remember 进来的当轮岗位；
    AI 解读另走 /api/jobs/<id>/analysis，渲染完再异步补进来（见 analysis.js）。 */
 
-import { go, back as navBack } from "./nav.js";
+import { go, back as navBack, onLeave } from "./nav.js";
 import { aiSection } from "./analysis.js";
 import { deRadical, el } from "./dom.js";
-import { api } from "./api.js";
+import { api, readJson } from "./api.js";
 
 export const SOURCE = { boss_recommend: "BOSS直聘·为你推荐", liepin: "猎聘" };
 
@@ -16,15 +16,10 @@ export const remember = (job) => {
   if (job?.id) remembered.set(job.id, job);
 };
 
-const idFromHash = () => {
-  const m = /^#job\/(.+)$/.exec(location.hash);
-  return m ? decodeURIComponent(m[1]) : "";
-};
-
 const find = async (id) => {
   if (remembered.has(id)) return remembered.get(id);
   store ??= api("/api/jobs")
-    .then((r) => r.json())
+    .then(readJson)
     .then((d) => {
       (d.jobs ?? []).forEach(remember);
       return d;
@@ -115,33 +110,27 @@ const show = async (id) => {
   slot.replaceChildren(aiSection(job, doc));
 };
 
+// 站内点击卡片：压一条历史再渲染，返回键/iPhone 侧滑才对得上。
+export const openJob = (id, push = false) => {
+  if (!id) return;
+  if (push) history.pushState({ view: "job" }, "", `/job/${encodeURIComponent(id)}`);
+  show(id);
+};
+
 const close = () => {
   shown = "";
-  // 直接粘链接进来的：hash 还在，清掉，否则下次刷新又会弹回详情页
-  if (location.hash) history.replaceState(null, "", location.pathname + location.search);
   navBack();
 };
+
+// 离开岗位详情（点卡片去别处、点 logo、后退）时清掉当前 id，
+// 下次点同一个岗位才会重渲染。
+onLeave("job", () => { shown = ""; });
 
 export const initJobDetail = () => {
   const backBtn = document.getElementById("job-back");
   backBtn.addEventListener("click", () => {
     // 从站内卡片进来的：交给浏览器历史，iPhone 侧滑返回才对得上。
-    if (history.state?.job) history.back();
+    if (history.state?.view === "job") history.back();
     else close();
   });
-  addEventListener("hashchange", () => {
-    const id = idFromHash();
-    if (id) {
-      // 锚点点击已经压了一条历史，这里只补 state，让返回键知道该往回退。
-      history.replaceState({ job: id }, "", `#job/${encodeURIComponent(id)}`);
-      return show(id);
-    }
-    // **不是我的 hash，不等于「关闭」。** 简历详情也走 hash 路由（#resume/<id>），
-    // 两个 handler 监听同一个事件：这里要是照旧把 hash 清掉再 navBack，Resume 页
-    // 点开的一瞬就被抹平了。只有空 hash 才是真的退出详情页。
-    if (location.hash) return;
-    close();
-  });
-  const id = idFromHash();
-  if (id) show(id);
 };

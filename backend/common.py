@@ -164,10 +164,10 @@ MODEL_CHAIN = [
 ]
 
 
-# chat（带工具的主 agent）只走这几家。链首小模型带 tools 会每步都调工具、四步跑满
-# 落不下正文（tech_doc 实测 126s 空回复）；groq 的 token 上限只适合不带工具的
-# subagent 调用（compact / analyze_jd / 抽 persona）。见 _run_chain 的 allow_endpoints。
-CHAT_ENDPOINTS = frozenset({"gemini", "agnes", "deepseek"})
+# chat（带工具的主 agent）走这几家。gpt-oss-120b 实测带 tools 正常（能纯文本回复、
+# 也能正确发起 tool_call），故纳入容灾链；它受 max_input_tokens 闸门约束，上下文超
+# ~7K token 时自动跳过，只有短对话（含首轮）才轮到它。见 _run_chain 的 allow_endpoints。
+CHAT_ENDPOINTS = frozenset({"gemini", "agnes", "groq", "deepseek"})
 
 
 # ── Worker 侧 bindings 注入 ───────────────────────────────────────────────

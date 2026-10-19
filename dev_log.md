@@ -538,3 +538,34 @@ hash 路由描述、`wrangler.jsonc` 注释一并对齐。
 **未完成**
 
 - 删除/切会话的剩余延迟来自 pyodide 冷启动（免费档），客户端只能靠乐观更新兜
+
+## 2026-10-19 — groq 进 chat 链 + 回复下方标注来源模型
+
+**做了什么**
+
+- chat 容灾链补回 groq：`common.CHAT_ENDPOINTS` 加入 `"groq"`（gemini 仍首轮
+  pinned；gemini/agnes 挂时落到 `gpt-oss-120b`）。「上下文超 8K 屏蔽 groq」不写
+  新代码——groq 三条本就带 `max_input_tokens=7000`，`_run_chain` 自动跳过。
+- 回复气泡下方加一行灰色小字标注本条来源模型 id：`_finish` 把 `model` 存进
+  assistant 历史条目，`_messages` 发 provider 前剔除该字段（防未知字段 400），
+  `history`/`full_history` 回传；前端 `appendModel()` 在流式/历史重建/断线重捞
+  三条路径都挂上，`.msg--them` 改 grid 让灰字落在气泡正下方。
+
+**验证**
+
+- `py_compile`（common/chat）、`node --check`（chat.js）、`wrangler deploy
+  --dry-run` 均通过；dry-run bundle grep key 无泄漏。
+- 已部署线上（版本 `88e15f00`），用户实测通过。
+
+**决定 / 实测**
+
+- groq context window 是 128K（`/v1/models` 实测 `131072`），卡的是免费档 TPM=8K：
+  单条请求总 token 超 8K 直接 413（实测 `Limit 8000, Requested 12088`）。二者不是
+  一回事，此前混过。详见 `tech_doc.md` 的「LLM 容灾链」。
+- `gpt-oss-120b` 带 tools 实测正常（带工具问「你好」纯文本回复、不瞎调工具；问
+  履历问题正确发起 tool_call）——旧注释里「groq 带 tools 四步跑满」针对的不是它。
+
+**未完成**
+
+- gemini 恢复后，若某轮 gemini 先产出带 thought_signature 的 tool_call、循环中途
+  换到 groq，可能 400；当前 gemini 开跑即挂（不产 tool_call），触发不到。

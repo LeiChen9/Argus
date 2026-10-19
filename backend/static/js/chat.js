@@ -85,11 +85,20 @@ const row = (who, text, bubble) => {
 // Argus 的回复是后端渲染好的 markdown HTML。div 而非 p：回复里有 h3/ul/hr
 // 等块级元素，放进 p 会被浏览器拆散、DOM 结构坏掉。
 // 只给这个函数用 innerHTML —— 用户自己的消息和错误文案仍走 row() 的 textContent。
-const showReply = (html) => {
+// assistant 回复下的来源模型灰字。挂了才有——加载中的打字气泡不带。
+const appendModel = (el, model) => {
+  if (!model) return;
+  const tag = document.createElement("div");
+  tag.className = "msg__model";
+  tag.textContent = model;
+  el.appendChild(tag);
+};
+
+const showReply = (html, model) => {
   const bubble = document.createElement("div");
   bubble.className = "bubble md";
   bubble.innerHTML = html;
-  show(row("them", null, bubble));
+  appendModel(show(row("them", null, bubble)), model);
 };
 
 // 还没上传过简历时，Argus 先开口。放在页面加载时做：chat 视图此刻是隐藏的，
@@ -113,7 +122,7 @@ const restoreHistory = async () => {
     const { messages } = await res.json();
     for (const m of messages) {
       if (m.role === "user") show(row("me", m.content));
-      else showReply(m.html);
+      else showReply(m.html, m.model);
     }
   } catch {}
 };
@@ -399,7 +408,7 @@ const recoverReply = async (sent) => {
     try {
       const res = await api("/api/chat/history", { headers: { "X-Session-Id": sid } });
       const t = (await res.json()).turn;
-      if (t && t.user === sent && t.reply) { showReply(t.reply); return true; }
+      if (t && t.user === sent && t.reply) { showReply(t.reply, t.model); return true; }
     } catch {}
     await new Promise((r) => setTimeout(r, 2000));
   }
@@ -438,9 +447,15 @@ const readStream = async (res, pending) => {
         bubble.textContent = raw;
         msgs.scrollTop = msgs.scrollHeight;
       } else if (ev === "reply") {
+        const rowEl = pendingBubble;
         pendingBubble = null;
-        if (bubble) { const md = document.createElement("div"); md.className = "bubble md"; md.innerHTML = data.reply; bubble.replaceWith(md); }
-        else { pending?.remove(); showReply(data.reply); }
+        if (bubble) {
+          const md = document.createElement("div");
+          md.className = "bubble md";
+          md.innerHTML = data.reply;
+          bubble.replaceWith(md);
+          appendModel(rowEl, data.model);
+        } else { pending?.remove(); showReply(data.reply, data.model); }
         return data;
       }
     }

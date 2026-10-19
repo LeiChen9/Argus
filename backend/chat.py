@@ -241,9 +241,13 @@ async def answer(sid: str, message: str, on_delta=None) -> dict:
 async def _messages(sid: str, message: str) -> list[dict]:
     """一轮对话要发给模型的消息。流式和非流式共用。"""
     sess = await _load_session(sid)
+    history = await auto_compact(sess["history"])
+    # 落盘的 assistant 条目带 model（前端灰字用），发给 provider 前剔掉——未知字段
+    # 会被部分 provider 400。只留消息协议的三件套。
+    history = [{k: v for k, v in m.items() if k in ("role", "content", "tool_calls")} for m in history]
     return [
         {"role": "system", "content": await _system_prompt(sid)},
-        *await auto_compact(sess["history"]),
+        *history,
         {"role": "user", "content": message},
     ]
 
@@ -256,7 +260,7 @@ async def _finish(sid: str, message: str, msg: dict, cards: list | None) -> dict
     if not reply.strip():
         raise RuntimeError("模型没产出正文")
     sess["history"].append({"role": "user", "content": message})
-    sess["history"].append({"role": "assistant", "content": reply})
+    sess["history"].append({"role": "assistant", "content": reply, "model": msg["model"]})
     # 首轮起个标题（只有还没有 title 时）。放在落盘前，和这一轮一起写下去。
     if not sess.get("title"):
         sess["title"] = await _make_title(sess)
@@ -328,7 +332,8 @@ async def history(sid: str) -> dict:
     h = (await _load_session(sid))["history"]
     if len(h) < 2:
         return {"turn": None}
-    return {"turn": {"user": h[-2]["content"], "reply": render_markdown(h[-1]["content"])}}
+    return {"turn": {"user": h[-2]["content"], "reply": render_markdown(h[-1]["content"]),
+                     "model": h[-1].get("model")}}
 
 
 async def full_history(sid: str) -> dict:
@@ -337,7 +342,7 @@ async def full_history(sid: str) -> dict:
     out = []
     for m in h:
         if m["role"] == "assistant":
-            out.append({"role": "assistant", "html": render_markdown(m["content"])})
+            out.append({"role": "assistant", "html": render_markdown(m["content"]), "model": m.get("model")})
         else:
             out.append({"role": "user", "content": m["content"]})
     return {"messages": out}

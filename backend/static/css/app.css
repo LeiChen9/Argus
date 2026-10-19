@@ -449,6 +449,25 @@ button { font: inherit; color: inherit; }
   color: var(--ink);
 }
 
+/* assistant 回复下的来源模型灰字。.msg--them 用 grid，让灰字落在气泡正下方，
+   而不是被 flex 排到气泡右侧；气泡仍是第二列的项，宽度约束不变。 */
+.msg--them {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas: "avatar bubble" ". model";
+  align-items: end;
+  column-gap: 8px;
+  row-gap: 2px;
+}
+.msg--them .avatar { grid-area: avatar; }
+.msg--them .bubble { grid-area: bubble; }
+.msg--them .msg__model {
+  grid-area: model;
+  padding-left: 2px;
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
 /* ── Markdown 回复 ──
    .bubble 的 white-space: pre-wrap 是给纯文本气泡留换行的；HTML 元素自带
    间距，再用 pre-wrap 会在段落和 hr 之间多出空白行，所以这里改回 normal。 */

@@ -29,25 +29,27 @@ Last updated: 2026-10-09
 ### LLM 容灾链
 
 `common.MODEL_CHAIN` 是一个有序列表，`_run_chain` 逐个试，第一个成功的即返回。
-链首全是免费模型，付费模型在后兜底：`agnes-3.0-flash` → `inclusionai/ling-3.1-flash`
-→ `nvidia/nemotron-3-ultra-550b-a55b:free`（kilo 网关）→ Groq 的 `gpt-oss-120b` /
-`gpt-oss-20b` / `qwen3.8-27b` → `gemini-3.5-flash` → `deepseek-v4-flash`。
+链首免费、付费在后兜底：`agnes-3.0-flash` → Groq 的 `gpt-oss-120b` / `gpt-oss-20b` /
+`qwen3.8-27b` → `gemini-3.5-flash` → `deepseek-v4-flash`。
 `active_chain` 还会把不在开放时段的 DeepSeek 剔掉（峰段按北京时间，显式 UTC+8）。
+chat（带工具的主 agent）只走 `CHAT_ENDPOINTS = {gemini, agnes, groq, deepseek}`，
+由 `_run_chain` 的 `allow_endpoints` 过滤。
 
-三个免费端点各有各的坑，都是实测出来的：
+几个免费端点实测出来的坑：
 
-- **Groq 从 Cloudflare 边缘可达**（中国 IP 直连的 403 问题在 Worker 上消失）；
-  离线脚本仍要走系统代理。链目支持 `max_input_tokens`，token 估算（字符启发式）
-  超限提前跳过，不去撞 413。
-- **kilo 必须写全模型名**。group 别名（如 `kilo`）会解析到别的模型，且返回的
-  `content` 可能是 `None`。**nemotron 会挂请求**（收了不吐字节），链上有 20s
-  超时兜底降级。
+- **Groq 的 context 与额度是两回事**：模型 context window 是 128K（`/v1/models`
+  实测 `131072`），但免费档 TPM 只有 8K——**单条请求总 token 超 8K 直接 413**，
+  跟窗口无关。故链上给 groq 三条设 `max_input_tokens=7000` 提前跳过（token 估算
+  是字符启发式：中文偏保守，重复 ASCII 会低估）。Groq 从 Cloudflare 边缘可达
+  （中国 IP 直连的 403 在 Worker 上消失），离线脚本仍要走系统代理。
 - **Gemini 3 的 thought_signature**：多轮工具调用必须把上轮 tool_calls 的
-  `extra_content` 原样带回，否则 400。chat.answer 里因此直接透传 dict。
+  `extra_content` 原样带回，否则 400。chat.answer 里因此直接透传 dict；中途换模型
+  会把别的模型产出的 tool_calls 带过去，是已知边界。
+- **agnes 会 429**（Cloudflare `error code: 1015` 限流），链上按普通失败降级。
 
-工具轮（chat 的 agent loop）`pinned=gemini`：链首小模型带 tools 会每步都调
-工具、四步跑满落不下正文（实测 126s 空回复）。`max_tokens=1024` 而非 8192：
-SYSTEM_PROMPT 要求「每次只输出一两句话」，弱模型给大额度会 rampble（实测单轮 73s）。
+工具轮（chat 的 agent loop）`pinned=gemini` 只影响首轮：gemini 挂了照常降级到
+agnes → groq → deepseek。gpt-oss-120b 实测带 tools 正常（能纯文本回复、也能正确
+发起 tool_call）。`max_tokens=4096`：SYSTEM_PROMPT 要求简短，1024 会把正常回答切断。
 
 ### Storage 说明
 
@@ -221,8 +223,7 @@ Career 上限 3 个（`build_careers.py::MAX_CAREERS`）：招聘平台只让留
 - **免费档实测边界**（2026-10-16）：10ms CPU/请求。读取路径（refresh + 解析 +
   markdown）稳定通过；token 启发式曾是 CPU 炸弹（逐字符 Python 循环，实测
   1101 超限），改 C 级 encode 后 18.5ms→0.13ms。LLM 等待是 I/O 不计 CPU。
-  groq 从边缘可达（中国 IP 的 403 消失）；kilo 的 nemotron 会挂请求，链上
-  有 20s 超时兜底降级。
+  groq 从边缘可达（中国 IP 的 403 消失）。
 - **已退役**（2026-10-16 删）：cloudflared 隧道、`argus-proxy` Worker + KV、
   `scripts/restart.sh`、`scripts/watchdog.sh`、uvicorn、`backend/main.py`、
   `me.py`、`routes_legacy.py`。

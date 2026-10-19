@@ -89,6 +89,33 @@ def kilo_client() -> OpenAI:
 
 
 @cache
+def cohere_client() -> OpenAI:
+    """Cohere OpenAI 兼容端点。trial key 免费但限 1000 calls/月。"""
+    from openai import OpenAI
+
+    ep = ENDPOINTS["cohere"]
+    return OpenAI(api_key=read_env_key(ep["key"]), base_url=ep["base_url"])
+
+
+@cache
+def requesty_client() -> OpenAI:
+    """Requesty 网关免费端点。免费模型限 20 req/min、200 req/天。"""
+    from openai import OpenAI
+
+    ep = ENDPOINTS["requesty"]
+    return OpenAI(api_key=read_env_key(ep["key"]), base_url=ep["base_url"])
+
+
+@cache
+def openrouter_client() -> OpenAI:
+    """OpenRouter 免费端点。:free 模型限 20 req/min、免费账户 50 req/天。"""
+    from openai import OpenAI
+
+    ep = ENDPOINTS["openrouter"]
+    return OpenAI(api_key=read_env_key(ep["key"]), base_url=ep["base_url"])
+
+
+@cache
 def groq_client() -> OpenAI:
     """Groq 免费端点。本地直连会被 403，离线脚本记得走系统代理。"""
     from openai import OpenAI
@@ -110,6 +137,9 @@ ENDPOINTS = {
     "deepseek": {"base_url": "https://api.deepseek.com/v1/", "key": "deepseek_apiKey", "env": "DEEPSEEK_API_KEY"},
     "agnes": {"base_url": "https://apihub.agnes-ai.com/v1/", "key": "agnes_apiKey", "env": "AGNES_API_KEY"},
     "kilo": {"base_url": "https://ai-gateway.kilo.ai/api/v1/", "key": "kilo_apiKey", "env": "KILO_API_KEY"},
+    "cohere": {"base_url": "https://api.cohere.ai/compatibility/v1/", "key": "cohere_apiKey", "env": "COHERE_API_KEY"},
+    "requesty": {"base_url": "https://router.requesty.ai/v1/", "key": "requesty_apiKey", "env": "REQUESTY_API_KEY"},
+    "openrouter": {"base_url": "https://openrouter.ai/api/v1/", "key": "openrouter_apiKey", "env": "OPENROUTER_API_KEY"},
     "groq": {"base_url": "https://api.groq.com/openai/v1/", "key": "groq_apiKey", "env": "GROQ_API_KEY"},
 }
 
@@ -173,7 +203,14 @@ MODEL_CHAIN = [
     {"name": "openai/gpt-oss-120b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
     {"name": "openai/gpt-oss-20b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
     {"name": "qwen/qwen3.8-27b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
+    {"name": "command-a-plus-05-2026", "endpoint": "cohere"},
+    {"name": "command-a-reasoning-08-2025", "endpoint": "cohere"},
+    {"name": "north-mini-code-1-0", "endpoint": "cohere"},
+    {"name": "novita/ling-3.1-flash", "endpoint": "requesty"},
+    {"name": "nvidia/muse-glimmer-30b", "endpoint": "requesty"},
+    {"name": "nvidia/nemotron-3.5-lightning-30b-a3b", "endpoint": "requesty"},
     {"name": GEMINI_MODEL, "endpoint": "gemini"},
+    {"name": "liquid/lfm-2.5-2.6b:free", "endpoint": "openrouter"},
     {"name": DEEPSEEK_MODEL, "endpoint": "deepseek"},
 ]
 
@@ -181,7 +218,7 @@ MODEL_CHAIN = [
 # chat（带工具的主 agent）走这几家。gpt-oss-120b 实测带 tools 正常（能纯文本回复、
 # 也能正确发起 tool_call），故纳入容灾链；它受 max_input_tokens 闸门约束，上下文超
 # ~7K token 时自动跳过，只有短对话（含首轮）才轮到它。见 _run_chain 的 allow_endpoints。
-CHAT_ENDPOINTS = frozenset({"gemini", "agnes", "kilo", "groq", "deepseek"})
+CHAT_ENDPOINTS = frozenset({"gemini", "agnes", "kilo", "cohere", "requesty", "openrouter", "groq", "deepseek"})
 
 
 # ── Worker 侧 bindings 注入 ───────────────────────────────────────────────
@@ -312,6 +349,9 @@ _SDK_FACTORIES = {
     "deepseek": deepseek_client,
     "agnes": agnes_client,
     "kilo": kilo_client,
+    "cohere": cohere_client,
+    "requesty": requesty_client,
+    "openrouter": openrouter_client,
     "groq": groq_client,
 }
 

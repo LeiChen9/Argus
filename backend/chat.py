@@ -14,7 +14,7 @@ import json
 import logging
 
 import common
-from common import GEMINI_MODEL, render_markdown, call_llm_async, call_llm_stream_async
+from common import render_markdown, call_llm_async, call_llm_stream_async
 from sessions import (
     load as _load_session, save as _save_session,
     list_all as _list_sessions, delete as _delete_session,
@@ -208,11 +208,11 @@ async def answer(sid: str, message: str, on_delta=None) -> dict:
     msg = None
     # max_tokens=4096：SYSTEM_PROMPT 要求简短，但 1024 实测会把正常回答切断
     # （用户线上撞到过）。ramble 风险靠 pinned + sticky 控制，不靠饿着模型。
-    # pinned/sticky：工具轮钉模型。第一轮钉 gemini；**之后钉上一轮真正接话的
-    # 那个模型**——gemini 的 thought_signature 只认自己产出的 tool_calls，
+    # pinned/sticky：工具轮钉模型。第一轮不钉，按 MODEL_CHAIN 顺序；**之后钉上一轮
+    # 真正接话的那个模型**——gemini 的 thought_signature 只认自己产出的 tool_calls，
     # 中途换模型必 400（groq 接了一轮再换回 gemini 实测复现）。
-    # pinned 只挪第一次尝试，挂了照常降级。
-    pin = GEMINI_MODEL
+    # pinned 只挪第一次尝试，挂了照常降级。gemini 沉到链尾（与别处共用 Google 配额）。
+    pin = None
     for _ in range(MAX_TOOL_STEPS):
         if on_delta is not None:
             msg = await call_llm_stream_async(messages, on_delta, tools=TOOLS, max_tokens=4096,

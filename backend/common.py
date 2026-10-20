@@ -196,22 +196,22 @@ def deepseek_open(now: datetime | None = None) -> bool:
 # 链从 8 条缩到 6 条，每一步的失败成本从 ~21s 降到毫秒级。
 # 2026-10-19 重新接入 kilo 的两个免费模型（实测工具调用/流式均正常）。
 MODEL_CHAIN = [
-    {"name": "agnes-3.0-flash", "endpoint": "agnes"},
     {"name": "minimax/minimax-m3.1-flash:free", "endpoint": "kilo"},
-    {"name": "nvidia/nemotron-3-super-120b-a12b:free", "endpoint": "kilo"},
-    {"name": "poolside/laguna-s-2.1:free", "endpoint": "kilo"},
-    {"name": "openai/gpt-oss-120b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
-    {"name": "openai/gpt-oss-20b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
-    {"name": "qwen/qwen3.8-27b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
     {"name": "command-a-plus-05-2026", "endpoint": "cohere"},
     {"name": "command-a-reasoning-08-2025", "endpoint": "cohere"},
-    {"name": "north-mini-code-1-0", "endpoint": "cohere"},
-    {"name": "novita/ling-3.1-flash", "endpoint": "requesty"},
-    {"name": "nvidia/muse-glimmer-30b", "endpoint": "requesty"},
     {"name": "nvidia/nemotron-3.5-lightning-30b-a3b", "endpoint": "requesty"},
-    {"name": GEMINI_MODEL, "endpoint": "gemini"},
-    {"name": "liquid/lfm-2.5-2.6b:free", "endpoint": "openrouter"},
+    {"name": "novita/ling-3.1-flash", "endpoint": "requesty"},
+    {"name": "openai/gpt-oss-120b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
+    {"name": "openai/gpt-oss-20b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
+    {"name": "north-mini-code-1-0", "endpoint": "cohere"},
     {"name": DEEPSEEK_MODEL, "endpoint": "deepseek"},
+    {"name": "nvidia/muse-glimmer-30b", "endpoint": "requesty"},
+    {"name": "liquid/lfm-2.5-2.6b:free", "endpoint": "openrouter"},
+    {"name": "agnes-3.0-flash", "endpoint": "agnes"},
+    {"name": "poolside/laguna-s-2.1:free", "endpoint": "kilo"},
+    {"name": "qwen/qwen3.8-27b", "endpoint": "groq", "max_input_tokens": GROQ_MAX_INPUT_TOKENS},
+    {"name": "nvidia/nemotron-3-super-120b-a12b:free", "endpoint": "kilo"},
+    {"name": GEMINI_MODEL, "endpoint": "gemini"},
 ]
 
 

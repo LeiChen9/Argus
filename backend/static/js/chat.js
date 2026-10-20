@@ -101,19 +101,6 @@ const showReply = (html, model) => {
   appendModel(show(row("them", null, bubble)), model);
 };
 
-// 还没上传过简历时，Argus 先开口。放在页面加载时做：chat 视图此刻是隐藏的，
-// 用户切过去时这句话已经在那里了。
-const NO_RESUME_GREETING = "你好呀。还没有你的简历，方便的话传一份给我？我想先认识你一下。";
-
-api("/api/persona")
-  .then((res) => res.json())
-  .then((data) => {
-    if (Object.keys(data).length === 0) show(row("them", NO_RESUME_GREETING));
-  })
-  // 未登录（401）时这条必然失败，不接住的话控制台会挂一条未处理的 rejection。
-  // 这条只是开场白，取不到就算了——登录状态由 app.js 的闸门管。
-  .catch(() => {});
-
 // 刷新后把整段对话重建出来。会话在 R2（按 sid），刷新只是丢了界面。
 // 只重建气泡：简历卡等派生 UI 不回滚，重进 Resume 页自会拉到当前版。
 const restoreHistory = async () => {
@@ -548,7 +535,21 @@ file.addEventListener("change", () => {
   chip.hidden = !picked;
 });
 
-// 进站初始化：拉会话列表，再把当前 sid 的历史重建成气泡。侧栏默认开合由
-// nav.js 按视图管（桌面进 chat 默认展开、手机默认收起）。
-loadSessions();
-restoreHistory();
+// 进站初始化：拉会话列表，再把当前 sid 的历史重建成气泡。由 app.js 在登录态
+// 确认后调用——放在模块加载时做会在登录前撞 401，且登录后没人重试。
+// 侧栏默认开合由 nav.js 按视图管（桌面进 chat 默认展开、手机默认收起）。
+const NO_RESUME_GREETING = "你好呀。还没有你的简历，方便的话传一份给我？我想先认识你一下。";
+let started = false;
+export const initChat = () => {
+  if (started) return;
+  started = true;
+  loadSessions();
+  restoreHistory();
+  // 还没上传过简历时，Argus 先开口。401 时取不到就算了，登录态由 app.js 管。
+  api("/api/persona")
+    .then((res) => res.json())
+    .then((data) => {
+      if (Object.keys(data).length === 0) show(row("them", NO_RESUME_GREETING));
+    })
+    .catch(() => {});
+};

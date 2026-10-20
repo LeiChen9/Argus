@@ -6,7 +6,7 @@ import { initJobDetail, openJob } from "./job.js";
 import { loadResume, initResumeDetail, openResume } from "./resumepage.js";
 import { loadMe, onAuthChange } from "./me.js";
 import { whenUnauthorized } from "./api.js";
-import "./chat.js";
+import { initChat } from "./chat.js";
 
 initJobDetail();
 initResumeDetail();
@@ -33,6 +33,7 @@ let loggedIn = false;
 onAuthChange((on) => {
   loggedIn = on;
   if (!on) go("me");
+  else initChat();
 });
 
 // 导航：底部 tabbar 去掉了，入口集中在首页那一排。

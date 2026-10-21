@@ -230,8 +230,13 @@ async def answer(sid: str, message: str, on_delta=None) -> dict:
                          "tool_calls": [t if isinstance(t, dict) else t.model_dump(exclude_none=True)
                                         for t in msg["tool_calls"]]})
         for t in msg["tool_calls"]:
-            result, found = await _execute_tool(sid, _tc_fn(t, "name"),
-                                                json.loads(_tc_fn(t, "arguments") or "{}"))
+            # 工具崩了不炸整轮：args 解析、执行任一环节抛错都折成 error result
+            # 喂回模型，让它自己绕路（答客/换工具），由 MAX_TOOL_STEPS 控次数。
+            try:
+                result, found = await _execute_tool(sid, _tc_fn(t, "name"),
+                                                    json.loads(_tc_fn(t, "arguments") or "{}"))
+            except Exception as e:
+                result, found = {"status": "error", "detail": str(e)[:200]}, None
             cards = found or cards
             messages.append({"role": "tool", "tool_call_id": _tc(t, "id"),
                              "content": json.dumps(result, ensure_ascii=False)})

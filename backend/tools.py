@@ -115,13 +115,15 @@ async def analyze_jd(jd: str) -> dict:
         # 一份简历都没建过时退回 persona 初稿，至少还能判断。
         material = f"<Candidate_Persona>\n{json.dumps(get_persona(), ensure_ascii=False, indent=2)}\n</Candidate_Persona>"
     material += f"\n\n<Target_JD>\n{jd[:JD_MAX_CHARS]}\n</Target_JD>"
-    # 1024 而不是 8192：输出是定长 JSON（best_resume/rationale/openning 三项），
-    # 给免费小模型 8192 它会 rampble——实测单轮 73 秒（见 chat.py::answer 同款注释）。
+    # 4096 而不是 1024：思考型模型（minimax、cohere reasoning）的推理 tokens 也
+    # 计入 max_tokens，1024 会被思考烧光、JSON 写一半就断 → clean_llm_json 必挂
+    # （线上「连续两次 JSON 解析失败」实录）。定长三字段 JSON 正常远用不了 4096，
+    # ramble 靠低温度（0.1）压，见 chat.py::answer 同款口径。
     msg = await call_llm_async(
         [{"role": "user", "content": ANALYZE_JD_PROMPT},
          {"role": "user", "content": material}],
         temperature=0.1,
-        max_tokens=1024,
+        max_tokens=4096,
     )
     return {"status": "ok", **clean_llm_json(msg["content"])}
 

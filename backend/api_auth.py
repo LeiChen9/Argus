@@ -110,7 +110,8 @@ async def logout() -> Response:
 
 def _cookie_header(value: str) -> dict:
     """Set-Cookie。SameSite=Lax：同源站点用，够用；Secure+HttpOnly 让 JS 读不到
-    身份、也防明文传输（公网本来就是 https）。**不带 Max-Age = 会话 cookie**，
-    关掉浏览器即失效——这就是「默认空账户」。logout 传空值即当场过期。"""
-    cookie = f"{COOKIE}={value}; Path=/; HttpOnly; Secure; SameSite=Lax"
+    身份、也防明文传输（公网本来就是 https）。Max-Age 一年：登录后常驻，不用
+    每次重开浏览器都登。logout 传空值 + Max-Age=0 即当场过期。"""
+    max_age = 31536000 if value else 0
+    cookie = f"{COOKIE}={value}; Path=/; Max-Age={max_age}; HttpOnly; Secure; SameSite=Lax"
     return {"set-cookie": cookie}

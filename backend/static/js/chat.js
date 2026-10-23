@@ -34,6 +34,10 @@ let awaiting = false;
 let stoppedByUser = false;
 let controller = null;
 let lastUserNode = null;
+// 捞回复的代际号：每轮发送 +1。被新一轮打败的 recoverReply 循环在此处自杀，
+// 否则它 2 分钟窗口内会把「原文相同的重发」刚落盘的同一回合捞回来渲染第二份
+// （线上 2026-10-21 实录：一模一样的回复出两遍，R2 只有一对）。
+let recoverGen = 0;
 
 const setBusy = (on) => {
   busy = on;
@@ -390,11 +394,13 @@ input.addEventListener("input", fit);
 // 送达。先把刚算完的那轮取回来，用户看到的还是答案而不是一句 Load failed。
 // 要 user 原文对得上才认，否则捞到的是上一轮，宁可不显示。
 // 重试窗口按最坏情况给足：实测跑满一轮要 90 秒以上，窗口短了等于没捞。
-const recoverReply = async (sent) => {
+const recoverReply = async (sent, gen) => {
   for (let i = 0; i < 60; i++) {
+    if (gen !== recoverGen) return false;   // 已有新一轮发送在跑，别再捞了
     try {
       const res = await api("/api/chat/history", { headers: { "X-Session-Id": sid } });
       const t = (await res.json()).turn;
+      if (gen !== recoverGen) return false; // 落盘对上了也可能已是新一轮的回合
       if (t && t.user === sent && t.reply) { showReply(t.reply, t.model); return true; }
     } catch {}
     await new Promise((r) => setTimeout(r, 2000));
@@ -454,6 +460,7 @@ const readStream = async (res, pending) => {
 // busy/awaiting 的话，迟早会漏掉一处状态。
 const sendMessage = async (message) => {
   stoppedByUser = false;
+  recoverGen += 1;   // 打败之前任何一轮残留的 recoverReply
   const node = row("me", message);
   lastUserNode = show(node);
   awaiting = true;
@@ -479,7 +486,7 @@ const sendMessage = async (message) => {
     if (err.name === "AbortError") return;
     // 后端明确报错（如所有模型不可用）时它根本没存盘，轮询 2 分钟纯属白等，直接显示。
     // 只有连接被掐（无 error 事件）才去捞，捞不回来才报原始错误，别把真错误盖掉。
-    if (err.fromServer || !(await recoverReply(message))) show(row("them", `我说不了话：${err.message}`));
+    if (err.fromServer || !(await recoverReply(message, recoverGen))) show(row("them", `我说不了话：${err.message}`));
   } finally {
     pending.remove();
     if (busy) setBusy(false);

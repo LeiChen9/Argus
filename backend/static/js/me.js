@@ -1,11 +1,10 @@
 // me.js —— Me 页：登录 / 注册 / 账号信息 / token 用量。
 //
-// 数据隔离的可见面就这一页：登录前谁都进不来（Worker 那边 401），登录后看到
-// 「我是谁」和「我烧了多少 token」。用量是 Worker 每轮对话结束时累加进
-// <用户>/usage.json 的，前端只读不算。
+// 数据隔离的可见面就这一页：登录前只看得到首页，数据页由 Worker 401 挡住；
+// 登录后看到「我是谁」和「我烧了多少 token」。用量是 Worker 每轮对话结束时
+// 累加进 <用户>/usage.json 的，前端只读不算。
 
-import { api, apiJson } from "./api.js";
-import { go } from "./nav.js";
+import { api, apiJson, readJson } from "./api.js";
 
 const el = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -25,9 +24,6 @@ const fmt = (n) => {
 
 // 当前登录框显示的是哪一种（"" = 普通登录/注册）。用来防重画，见下。
 let loginMode = null;
-
-// 已经渲染出账号页（而不是登录框）= 登录成功。
-const boxHasProfile = () => !!root().querySelector(".mecard");
 
 function renderLogin(message) {
   const box = root();
@@ -58,15 +54,17 @@ function renderLogin(message) {
   const send = async (path, body) => {
     note.textContent = "…";
     try {
-      await api(path, {
+      const res = await api(path, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
+      const data = await readJson(res);
+      if (!res.ok) throw Object.assign(new Error(data.detail || `HTTP ${res.status}`), { detail: data.detail });
       note.textContent = "";
-      await loadMe();
-      // 登录是从 Me 页发起的，成功后把人送回首页——不然他得再点一次顶部 logo。
-      if (boxHasProfile()) go("home");
+      const next = sessionStorage.getItem("argus_after_login");
+      sessionStorage.removeItem("argus_after_login");
+      location.assign(next === "chat" ? "/chat" : "/");
     } catch (e) {
       note.textContent = e.detail || e.message || "登录失败";
     }
@@ -74,7 +72,7 @@ function renderLogin(message) {
 
   form.addEventListener("submit", (e) => {
     e.preventDefault();
-    send("/api/auth/login", { username: user.value.trim(), password: pass.value });
+    send(registering ? "/api/auth/register" : "/api/auth/login", { username: user.value.trim(), password: pass.value });
   });
 
   let registering = false;
@@ -122,14 +120,17 @@ function renderProfile(data) {
 
   const out = el("button", "meform__alt", "退出登录");
   out.addEventListener("click", async () => {
-    await api("/api/auth/logout", { method: "POST" });
-    renderLogin("已退出");
-    onAuth(false);
+    try {
+      await api("/api/auth/logout", { method: "POST" });
+    } finally {
+      sessionStorage.removeItem("argus_after_login");
+      location.reload();
+    }
   });
   box.append(out);
 }
 
-// 登录状态变了就通知外面（app.js 拿它守门：没登录只让进 Me 页）。
+// 登录状态变了就通知外面（app.js 拿它守门：没登录只放行首页）。
 let onAuth = () => {};
 export const onAuthChange = (fn) => { onAuth = fn; };
 
@@ -139,8 +140,15 @@ export async function loadMe() {
     renderProfile(data);
     onAuth(true);
   } catch (e) {
-    renderLogin(e.detail === "没登录" ? "" : (e.detail || e.message || ""));
-    onAuth(false);
+    if (e.status === 401) {
+      renderLogin(e.detail === "没登录" ? "" : (e.detail || e.message || ""));
+      onAuth(false);
+    } else {
+      const retry = el("button", "meform__alt", "重试");
+      retry.type = "button";
+      retry.addEventListener("click", loadMe);
+      root().replaceChildren(el("p", "meform__note", e.message || "加载失败，请刷新"), retry);
+    }
   }
   return root();
 }

@@ -37,7 +37,10 @@ async def resumes_list_ensured():
 
 
 def resumes_get(career_id: str):
-    doc = resume.document(career_id)
+    try:
+        doc = resume.document(career_id)
+    except ValueError as e:
+        return _json({"detail": str(e)}, status=400)
     if not doc:
         return _json({"detail": f"{career_id} 还没有简历"}, status=404)
     return _json(doc)

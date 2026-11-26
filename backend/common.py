@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import time
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from functools import cache
 from pathlib import Path
@@ -275,8 +276,10 @@ def render_markdown(text: str) -> str:
 def clean_llm_json(raw: str) -> dict:
     import re
     body = raw.strip()
-    if (body.startswith("```")):
-        body = body.split("\n", 1)[1].rsplit("```", 1)[0].strip().removeprefix("json").strip()
+    if body.startswith("```"):
+        body = body.removeprefix("```").strip()
+        body = body.removeprefix("json").strip()
+        body = body.rsplit("```", 1)[0].strip()
     for _ in range(2):
         try:
             return json.loads(body)
@@ -409,9 +412,16 @@ async def _fetch_create(item, messages, tools, temperature, max_tokens, on_delta
     except asyncio.TimeoutError:
         raise RuntimeError(f"{item['name']} 20s 未响应")
     if resp.status != 200:
-        raise RuntimeError(f"{item['name']} HTTP {resp.status}: {(await resp.text())[:200]}")
+        try:
+            text = await asyncio.wait_for(resp.text(), timeout=20.0)
+        except asyncio.TimeoutError:
+            text = "(body timeout)"
+        raise RuntimeError(f"{item['name']} HTTP {resp.status}: {text[:200]}")
     if not stream:
-        body_json = await resp.json()
+        try:
+            body_json = await asyncio.wait_for(resp.json(), timeout=20.0)
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"{item['name']} 响应体 20s 未返回")
         msg = body_json["choices"][0]["message"]
         return {"content": msg.get("content"), "tool_calls": msg.get("tool_calls"),
                 "usage": body_json.get("usage")}
@@ -419,6 +429,33 @@ async def _fetch_create(item, messages, tools, temperature, max_tokens, on_delta
     decoder = js.TextDecoder.new()
     decode_stream = to_js({"stream": True})
     buf, acc = "", _DeltaAcc()
+    usage = None
+
+    def consume(data):
+        nonlocal usage
+        if data == "[DONE]":
+            return {"content": acc.text, "tool_calls": acc.result(), "usage": usage}
+        try:
+            obj = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            if data.lstrip().startswith("{"):
+                raise RuntimeError(f"{item['name']} 流式帧损坏: {data[:120]}")
+            return None
+        if not isinstance(obj, dict):
+            return None
+        if obj.get("error"):
+            raise RuntimeError(f"{item['name']} 流式错误: {str(obj['error'])[:200]}")
+        if obj.get("usage"):
+            usage = obj["usage"]
+        try:
+            delta = obj["choices"][0].get("delta") or {}
+        except (KeyError, IndexError, TypeError):
+            return None
+        new = acc.add(delta)
+        if new:
+            on_delta(new)
+        return None
+
     while True:
         # 20s idle 超时：上游收了请求不吐字节（实测 kilo 的 nemotron 挂 30s 白等），
         # 没有这道闸门整轮对话就永远停在 reader.read() 上。超时按普通失败降级。
@@ -436,37 +473,40 @@ async def _fetch_create(item, messages, tools, temperature, max_tokens, on_delta
             line = line.strip()
             if not line.startswith("data:"):
                 continue
-            data = line[len("data:"):].strip()
-            if data == "[DONE]":
-                return {"content": acc.text, "tool_calls": acc.result()}
-            try:
-                delta = json.loads(data)["choices"][0].get("delta") or {}
-            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
-                continue
-            new = acc.add(delta)
-            if new:
-                on_delta(new)
-    return {"content": acc.text, "tool_calls": acc.result()}
+            result = consume(line[len("data:"):].strip())
+            if result is not None:
+                return result
+    line = buf.strip()
+    if line.startswith("data:"):
+        result = consume(line[len("data:"):].strip())
+        if result is not None:
+            return result
+    return {"content": acc.text, "tool_calls": acc.result(), "usage": usage}
 
 
 # 链的最近尝试记录（模型 / 耗时 / 结果）。线上没有 wrangler tail 可视性
 # （本地网络连不上 tail 端点），慢或挂时靠它定位是哪一家、卡在哪一步。
-_last_trace: list[dict] = []
+_LAST_TRACE: ContextVar[list[dict] | None] = ContextVar("argus_trace", default=None)
 
-# 本次 isolate 生命周期内、每个模型成功接话时记的 token 用量。
+# 本次请求内、每个模型成功接话时记的 token 用量。
 # 累加在内存里、请求末由 entrypoint 落 R2（usage.json）：每步都写一次 R2
 # 会把 I/O 翻倍，而 token 账本晚几百毫秒落盘没有任何影响。
-_usage: dict[str, dict] = {}
+_USAGE: ContextVar[dict[str, dict] | None] = ContextVar("argus_usage", default=None)
+
+
+def _trace(row: dict) -> None:
+    trace = _LAST_TRACE.get()
+    if trace is None:
+        trace = []
+        _LAST_TRACE.set(trace)
+    trace.append(row)
 
 
 def usage_snapshot() -> dict:
-    """取走并清零本轮累加的用量。entrypoint 每请求末调。
-
-    必须 copy 一份再清：直接返回 _usage 本身的话，下面 _usage.clear() 会把
-    交给调用方的那个字典也清空——账本会静默变成永远为空。
-    """
-    out = {k: dict(v) for k, v in _usage.items()}
-    _usage.clear()
+    """取走并清零本轮累加的用量。entrypoint 每请求末调。"""
+    usage = _USAGE.get() or {}
+    out = {k: dict(v) for k, v in usage.items()}
+    _USAGE.set({})
     return out
 
 
@@ -481,7 +521,7 @@ def bind_usage_flush(fn) -> None:
 
 async def flush_usage() -> None:
     """把本轮用量交给注入的落盘函数。没注入就是只累加不落盘（离线脚本）。"""
-    if _usage_flush is not None and _usage:
+    if _usage_flush is not None and _USAGE.get():
         try:
             await _usage_flush(usage_snapshot())
         except Exception as e:  # 账本写失败绝不能把用户的回答搞挂
@@ -501,18 +541,23 @@ def _note_usage(model: str, usage, input_tokens: int, out_chars: int) -> None:
         u_out = _g(usage, "completion_tokens") or _g(usage, "output_tokens") or out_chars // 2
     else:
         u_in, u_out = input_tokens, out_chars // 2
-    row = _usage.setdefault(model, {"calls": 0, "input": 0, "output": 0})
+    usage = _USAGE.get()
+    if usage is None:
+        usage = {}
+        _USAGE.set(usage)
+    row = usage.setdefault(model, {"calls": 0, "input": 0, "output": 0})
     row["calls"] += 1
     row["input"] += int(u_in or 0)
     row["output"] += int(u_out or 0)
 
 
 def last_trace() -> list[dict]:
-    return _last_trace[-12:]
+    return list((_LAST_TRACE.get() or [])[-12:])
 
 
 async def _run_chain(create, messages: list[dict], *, tools=None, temperature=0.7,
-                     pinned=None, max_tokens=None, on_delta=None, allow_endpoints=None) -> dict:
+                     pinned=None, max_tokens=None, on_delta=None, on_reset=None,
+                     allow_endpoints=None) -> dict:
     """统一 LLM 调用，按 active_chain 顺序故障转移。返回消息内容与实际模型名。
 
     pinned 把指定模型提到链首，**只影响第一次尝试**：它失败仍照常降级到链上其余模型。
@@ -540,20 +585,35 @@ async def _run_chain(create, messages: list[dict], *, tools=None, temperature=0.
             failures.append(f"{model_name}: 输入超限跳过")
             continue
         t0 = time.perf_counter()
+        emitted = False
+
+        def attempt_delta(delta):
+            nonlocal emitted
+            emitted = True
+            on_delta(delta)
+
         try:
-            msg = await create(item, messages, tools, temperature, max_tokens, on_delta)
+            msg = await create(item, messages, tools, temperature, max_tokens,
+                               attempt_delta if on_delta is not None else None)
             # 200 但既没正文也没工具调用 = 这家给不出东西，按失败降级到链上下一个模型。
             if not (msg.get("content") or "").strip() and not msg.get("tool_calls"):
                 raise RuntimeError("空响应（无正文、无工具调用）")
-            _last_trace.append({"model": model_name, "ms": round((time.perf_counter() - t0) * 1000), "ok": True})
+            _trace({"model": model_name, "ms": round((time.perf_counter() - t0) * 1000), "ok": True})
             _note_usage(model_name, msg.get("usage"), tokens, len(msg.get("content") or ""))
             logger.info(f"使用模型: {model_name}")
             return {**msg, "model": model_name}
         except Exception as e:
+            if emitted:
+                if on_reset is not None:
+                    try:
+                        on_reset()
+                    except Exception:
+                        pass
+                raise RuntimeError(f"{model_name} 流式中途失败，已停止切换: {e}") from e
             last_err = e
             failures.append(f"{model_name}: {type(e).__name__}: {str(e)[:120]}")
-            _last_trace.append({"model": model_name, "ms": round((time.perf_counter() - t0) * 1000),
-                                "ok": False, "err": f"{type(e).__name__}: {str(e)[:120]}"})
+            _trace({"model": model_name, "ms": round((time.perf_counter() - t0) * 1000),
+                    "ok": False, "err": f"{type(e).__name__}: {str(e)[:120]}"})
             logger.warning(f"模型 {model_name} 失败: {e}")
     # 各家失败原因拼进错误里：链是黑盒的话，线上慢/挂时只能干猜。
     raise RuntimeError(f"所有模型均不可用: {last_err}｜经过: {'; '.join(failures)}")
@@ -582,11 +642,12 @@ async def call_llm_async(messages: list[dict], *, tools=None, temperature=0.7,
 
 
 async def call_llm_stream_async(messages: list[dict], on_delta, *, tools=None, temperature=0.7,
-                                pinned=None, max_tokens=None, allow_endpoints=None) -> dict:
+                                pinned=None, max_tokens=None, on_reset=None,
+                                allow_endpoints=None) -> dict:
     """Worker 流式入口：fetch 传输，语义同 call_llm_async。"""
     return await _run_chain(_fetch_create, messages, tools=tools, temperature=temperature,
                             pinned=pinned, max_tokens=max_tokens, on_delta=on_delta,
-                            allow_endpoints=allow_endpoints)
+                            on_reset=on_reset, allow_endpoints=allow_endpoints)
 
 
 def ask_json(prompt: str, blocks: list[str], temperature: float = 0.7,

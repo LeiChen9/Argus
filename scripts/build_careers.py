@@ -161,8 +161,13 @@ def verify(result: dict, jobs: list[dict]) -> None:
     重复出现两次，会让它在两个 Career 里都被当成成员。
     """
     careers = result.get("careers") or []
+    if not careers:
+        raise RuntimeError("career 为空，拒绝覆盖现有 careers.json")
     if len(careers) > MAX_CAREERS:
         raise RuntimeError(f"career 数 {len(careers)} 超过上限 {MAX_CAREERS}")
+    cids = [f.get("career_id") for f in careers]
+    if any(not cid for cid in cids) or len(cids) != len(set(cids)):
+        raise RuntimeError(f"career_id 缺失或重复：{cids}")
     ids = [
         j.get("job_id")
         for f in careers

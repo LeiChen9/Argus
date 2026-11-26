@@ -14,6 +14,7 @@ isolate、各存一份会话——history 恢复十条里九条落空。落 R2 �
 真出问题那天再上 R2 的条件写（etag）。
 """
 
+import asyncio
 import json
 import time
 
@@ -21,6 +22,15 @@ import utils
 
 _env = None
 _mem: dict[str, dict] = {}
+_locks: dict[str, asyncio.Lock] = {}
+
+
+def lock(sid: str) -> asyncio.Lock:
+    lock = _locks.get(sid)
+    if lock is None:
+        lock = asyncio.Lock()
+        _locks[sid] = lock
+    return lock
 
 
 def bind_r2(env) -> None:
@@ -38,23 +48,34 @@ def fresh() -> dict:
     return {"history": [], "resume_career": None, "updated_at": time.time()}
 
 
+def _normalize(sess) -> dict:
+    if not isinstance(sess, dict):
+        return fresh()
+    sess.setdefault("history", [])
+    sess.setdefault("resume_career", None)
+    return sess
+
+
 def _key(sid: str) -> str:
     """会话 key 也归到用户命名空间下：别人的 sid 猜到了也读不到。"""
     return f"{utils.user_prefix()}chat_sessions/{sid}.json"
 
 
+def _tomb_key(sid: str) -> str:
+    return f"{utils.user_prefix()}chat_sessions/{sid}.deleted"
+
+
 async def load(sid: str) -> dict:
     if _env is None:
-        return _mem.get(sid) or fresh()
+        return _normalize(_mem.get(sid))
     obj = await _env.DATA.get(_key(sid))
     if obj is None:
         return fresh()
     try:
         s = json.loads(await obj.text())
-    except Exception:
-        # 读坏了当没有：这一轮对话从头开始，好过让用户对着 500。
-        return fresh()
-    return s
+    except Exception as e:
+        raise RuntimeError(f"会话 {sid} 读取失败") from e
+    return _normalize(s)
 
 
 def _summarize(sid: str, sess: dict) -> dict:
@@ -62,9 +83,13 @@ def _summarize(sid: str, sess: dict) -> dict:
     到首条用户消息截断，连用户消息都没有的空会话叫「新对话」。"""
     title = (sess.get("title") or "").strip()
     if not title:
-        first = next((m["content"] for m in sess.get("history", []) if m["role"] == "user"), "")
+        first = next((str(m.get("content") or "") for m in sess.get("history", []) if m.get("role") == "user"), "")
         title = first.strip()[:20] or "新对话"
-    return {"sid": sid, "title": title, "updated_at": sess.get("updated_at", 0)}
+    try:
+        updated = float(sess.get("updated_at") or 0)
+    except (TypeError, ValueError):
+        updated = 0
+    return {"sid": sid, "title": title, "updated_at": updated}
 
 
 async def list_all() -> list[dict]:
@@ -78,9 +103,13 @@ async def list_all() -> list[dict]:
         listed = await _env.DATA.list(to_js({"prefix": prefix}))
         items = []
         for obj in listed.objects:
-            text = await (await _env.DATA.get(obj.key)).text()
+            if not obj.key.endswith(".json"):
+                continue
+            body = await _env.DATA.get(obj.key)
+            if body is None:
+                continue
             try:
-                sess = json.loads(text)
+                sess = _normalize(json.loads(await body.text()))
             except Exception:
                 continue
             items.append(_summarize(obj.key[len(prefix):-len(".json")], sess))
@@ -91,6 +120,7 @@ async def delete(sid: str) -> None:
     if _env is None:
         _mem.pop(sid, None)
         return
+    await _env.DATA.put(_tomb_key(sid), json.dumps({"at": time.time()}) + "\n")
     await _env.DATA.delete(_key(sid))
 
 
@@ -99,6 +129,11 @@ async def save(sid: str, sess: dict) -> None:
     if _env is None:
         _mem[sid] = sess
         return
+    try:
+        if await _env.DATA.get(_tomb_key(sid)) is not None:
+            return
+    except Exception:
+        pass
     await _env.DATA.put(
         _key(sid),
         json.dumps(sess, ensure_ascii=False, indent=2) + "\n",

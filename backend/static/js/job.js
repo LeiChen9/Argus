@@ -1,9 +1,7 @@
 /* 岗位详情：路径是 /job/<id>，这里按路径找岗位渲染。
-   岗位数据来自 /api/jobs 全量返回 + cards 渲染时顺手 remember 进来的当轮岗位；
-   AI 解读另走 /api/jobs/<id>/analysis，渲染完再异步补进来（见 analysis.js）。 */
+   岗位数据来自 /api/jobs 全量返回 + cards 渲染时顺手 remember 进来的当轮岗位。 */
 
-import { go, back as navBack, onLeave } from "./nav.js";
-import { aiSection } from "./analysis.js";
+import { go, back as navBack, onLeave, routeId } from "./nav.js";
 import { deRadical, el } from "./dom.js";
 import { api, readJson } from "./api.js";
 
@@ -23,7 +21,8 @@ const find = async (id) => {
     .then((d) => {
       (d.jobs ?? []).forEach(remember);
       return d;
-    });
+    })
+    .catch((e) => { store = null; throw e; });
   await store;
   return remembered.get(id);
 };
@@ -79,35 +78,25 @@ const render = (job) => {
     kids.push(box);
   }
 
-  // JD 是投递的原始依据，默认展开；解读是模型的推论，默认折叠。
+  // JD 是投递的原始依据，默认展开。
   kids.push(el("pre", "jdetail__jd", deRadical(job.jd) || "（暂无职位描述）"));
 
-  // 解读的挂载点：先占位，异步拿到结果后整段替换。
-  const slot = el("div", "ai__slot");
-  const loading = el("p", "ai__loading typing");
-  loading.append(el("i"), el("i"), el("i"));
-  slot.appendChild(loading);
-  kids.push(slot);
-
   document.getElementById("job-body").replaceChildren(...kids);
-  return slot;
 };
 
 let shown = "";
 const show = async (id) => {
-  const job = await find(id);
+  let job;
+  try {
+    job = await find(id);
+  } catch {
+    return;
+  }
   if (!job) return; // 岗位已被新快照覆盖：留在原地，别开一个空页
-  if (shown === id) return;
+  if (shown === id || routeId() !== id) return;
   shown = id;
-  const slot = render(job);
+  render(job);
   go("job");
-
-  // 解读是懒加载的，返回时可能已经切到别的岗位或离开了详情页，丢弃即可。
-  const doc = await api(`/api/jobs/${encodeURIComponent(id)}/analysis`)
-    .then((r) => (r.ok ? r.json() : null))
-    .catch(() => null);
-  if (!doc || shown !== id || !slot.isConnected) return;
-  slot.replaceChildren(aiSection(job, doc));
 };
 
 // 站内点击卡片：压一条历史再渲染，返回键/iPhone 侧滑才对得上。

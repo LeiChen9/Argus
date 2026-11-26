@@ -127,15 +127,11 @@ def _cookie(request, name: str) -> str:
 
 
 async def _resolve_user(request) -> str:
-    """cookie → 用户名，且必须在 users.json 里查到。
-
-    查一遍是有意的：cookie 是浏览器存的用户可控字符串，登出（同名旧 cookie）
-    或有人手敲一个 cookie 时，不查表就等于给了越权读别人数据的门路。
-    """
-    name = _cookie(request, api_auth.COOKIE)
-    if not name or not api_auth.valid_name(name):
+    """cookie → 用 session token 换用户名。token 不存在、过期或损坏一律当没登录。"""
+    raw = _cookie(request, api_auth.COOKIE)
+    if not raw:
         return ""
-    return name if name in await api_auth.load_users() else ""
+    return await api_auth.resolve(raw)
 
 
 class Default(WorkerEntrypoint):
@@ -146,25 +142,33 @@ class Default(WorkerEntrypoint):
         # 未登录时它们会先撞上下面的 401，SPA 回退永远轮不到。
         if not path.startswith("/api/"):
             return await self.env.ASSETS.fetch(request)
-        if path == "/api/ping":
-            return _no_store(await self._ping(request))
-        if path == "/api/debug/llm":
-            return _no_store(await self._debug_llm(request))
         if path in ("/api/auth/login", "/api/auth/register"):
             # 这三个端点的 Bad 要在这里接住：它们排在业务路由那套 try 之外，
             # 漏掉的话「密码不对」会变成 500（1101），而不是用户该看的 401。
             try:
+                body = await request.json()
+                if not isinstance(body, dict):
+                    raise ValueError
+            except Exception:
+                return _no_store(Response.json({"detail": "请求体不是合法 JSON"}, status=400))
+            try:
                 if path == "/api/auth/register":
-                    return await api_auth.register(await request.json())
-                return await api_auth.login(await request.json())
+                    return _no_store(await api_auth.register(body))
+                return _no_store(await api_auth.login(body))
             except api_auth.Bad as e:
-                return Response.json({"detail": e.detail}, status=e.status)
+                return _no_store(Response.json({"detail": e.detail}, status=e.status))
         if path == "/api/auth/logout":
-            return _no_store(await api_auth.logout())
+            if request.method != "POST":
+                return _no_store(Response.json({"detail": "只收 POST"}, status=405))
+            return _no_store(await api_auth.logout(_cookie(request, api_auth.COOKIE)))
         user = await _resolve_user(request)
         if not user:
             return _no_store(Response.json({"detail": "没登录"}, status=401))
         utils.bind_user(user)
+        if path == "/api/ping":
+            return _no_store(await self._ping(request))
+        if path == "/api/debug/llm":
+            return _no_store(await self._debug_llm(request))
         if path.startswith("/api/"):
             if path not in NO_STORE_PATHS:
                 await self._refresh()
@@ -220,9 +224,6 @@ class Default(WorkerEntrypoint):
 
     async def _ping(self, request) -> Response:
         """读真实数据文件并分步计时。R2 往返是 I/O 不计 CPU，其余步骤墙钟≈CPU。"""
-        # 探针不要求登录（登录坏了也得能看），所以自己解析一次用户再灌命名空间：
-        # 不 bind 的话读的是上一个请求留在 isolate 里的前缀，探针会指错文件。
-        utils.bind_user(await _resolve_user(request))
         steps = {}
 
         t0 = performance.now()
@@ -236,7 +237,11 @@ class Default(WorkerEntrypoint):
         # 后面所有亚毫秒数字都不可信；量级对得上（pyodide 里此 loop 约 10-30ms）
         # 才说明「解析 ≈ 0ms」是真快，不是没测到。
         # loops 可调大把信号顶出量化区间；20M 级能返回即说明不在免费 CPU 限额内。
-        loops = int(parse_qs(urlparse(request.url).query).get("loops", ["200000"])[0])
+        try:
+            loops = int(parse_qs(urlparse(request.url).query).get("loops", ["200000"])[0])
+        except ValueError:
+            loops = 200000
+        loops = max(0, min(loops, 1_000_000))
         t0 = performance.now()
         acc = 0
         for i in range(loops):
@@ -250,7 +255,10 @@ class Default(WorkerEntrypoint):
         steps["parse_careers_ms"] = (performance.now() - t0) / 100
 
         t0 = performance.now()
-        jobs_text = await (await self.env.DATA.get(utils.user_prefix() + "boss_jobs.json")).text()
+        jobs_obj = await self.env.DATA.get(utils.user_prefix() + "boss_jobs.json")
+        if jobs_obj is None:
+            return Response.json({"detail": "R2 缺 boss_jobs.json，先传快照"}, status=500)
+        jobs_text = await jobs_obj.text()
         steps["r2_get_jobs_ms"] = _ms(t0)
 
         t0 = performance.now()
@@ -302,7 +310,12 @@ class Default(WorkerEntrypoint):
         同步回调，只往队列里塞，真正写流是另一件事）。chat 上线后这个端点留着：
         换模型、验某家 endpoint 通不通，都不用等前端。
         """
-        body = await request.json()
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError
+        except Exception:
+            return Response.json({"detail": "请求体不是合法 JSON"}, status=400)
         messages = body.get("messages") or [{"role": "user", "content": "用一句话说明你是哪家模型"}]
         model = body.get("model")
         tools = body.get("tools")

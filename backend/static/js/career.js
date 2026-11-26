@@ -49,4 +49,4 @@ export const loadCareer = () =>
     if (doc.careers.length) {
       stage.replaceChildren(...doc.careers.map((f) => career(f, resumes.get(f.career_id))));
     }
-  });
+  }).catch((e) => stage.replaceChildren(errNote(e, "取 Career")));

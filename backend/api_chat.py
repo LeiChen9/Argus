@@ -44,6 +44,8 @@ def _sse(event: str, data: dict) -> str:
 async def _message(request) -> str:
     try:
         body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError
     except Exception:
         raise Bad("请求体不是合法 JSON")
     msg = (body.get("message") or "").strip()
@@ -57,6 +59,8 @@ async def _target_sid(request) -> str:
     缺 header 会退成 "default"，那是别人的会话）。"""
     try:
         body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError
     except Exception:
         raise Bad("请求体不是合法 JSON")
     sid = (body.get("sid") or "").strip()
@@ -76,9 +80,11 @@ async def chat(request) -> Response:
         payload["chain"] = common.last_trace()
         payload["session_backend"] = sessions.backend_name()
         return Response.json(payload)
-    except RuntimeError:
-        # 所有模型均不可用/模型没产出正文。链上细节只进 trace，不给用户看。
+    except Exception:
+        # 所有模型均不可用、会话读取失败等。内部细节不进响应，避免把实现暴露给用户。
         return Response.json({"detail": "暂时连不上模型，过会儿再试"}, status=502)
+    finally:
+        await common.flush_usage()
 
 
 async def chat_stream(request) -> Response:
@@ -95,33 +101,50 @@ async def chat_stream(request) -> Response:
 
     async def pump():
         q: asyncio.Queue = asyncio.Queue()
+        closed = False
 
         def on_delta(t):
-            q.put_nowait(("content", {"content": t}))
+            if not closed:
+                q.put_nowait(("content", {"content": t}))
+
+        def on_reset():
+            if not closed:
+                q.put_nowait(("reset", {}))
 
         async def sender():
-            while True:
-                try:
-                    item = await asyncio.wait_for(q.get(), timeout=5.0)
-                except asyncio.TimeoutError:
-                    await writer.write(": keepalive\n\n")
-                    continue
-                if item is None:
-                    return
-                await writer.write(_sse(*item))
+            nonlocal closed
+            try:
+                while True:
+                    try:
+                        item = await asyncio.wait_for(q.get(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        await writer.write(": keepalive\n\n")
+                        continue
+                    if item is None:
+                        return
+                    await writer.write(_sse(*item))
+            except Exception:
+                pass
+            finally:
+                closed = True
 
         send_task = asyncio.create_task(sender())
         try:
-            await q.put(("reply", await answer(sid, message, on_delta=on_delta)))
+            await q.put(("reply", await answer(sid, message, on_delta=on_delta, on_reset=on_reset)))
         except Exception:
             # 内部错误（含整条链失败）不给用户看细节，链上有 last_trace 可查。
             await q.put(("error", {"detail": "暂时连不上模型，过会儿再试"}))
         finally:
+            await common.flush_usage()
             await q.put(None)
-            await send_task
+            try:
+                await send_task
+            except Exception:
+                pass
             await writer.close()
 
-    asyncio.create_task(pump())
+    task = asyncio.create_task(pump())
+    task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
     return resp
 
 

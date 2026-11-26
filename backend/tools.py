@@ -25,10 +25,10 @@ from common import call_llm_async, clean_llm_json, _input_tokens
 from persona import get_persona
 from resume import (
     CAREERS,
-    RESUME_DIR,
     body as resume_body,
     copy_from_persona,
     critique,
+    resume_file,
     resume_paths,
 )
 from utils import load_file, tool
@@ -159,7 +159,7 @@ async def start_resume(career_id: str) -> dict:
         "提醒": "以上是他自己写的，只写了自以为拿得出手的部分。据此开始提问。",
     }
     # 没有简历就先有一份：persona 去掉求职意向，逐字拷贝，不调 LLM。
-    if load_file(RESUME_DIR / f"{career_id}.json"):
+    if load_file(resume_file(career_id)):
         out["简历"] = "已存在，直接读它继续"
     else:
         await copy_from_persona(career_id)
@@ -173,7 +173,7 @@ def read_resume(career_id: str) -> dict:
 
     这份是**他自己改过的当前版本**，跟 read_persona（最初上传的初稿）不是一回事。
     """
-    saved = load_file(RESUME_DIR / f"{career_id}.json")
+    saved = load_file(resume_file(career_id))
     if not saved:
         raise FileNotFoundError(f"{career_id} 还没有简历，先调 start_resume 建一份")
     # 剥掉 edits，同 resume.body：它是改动历史不是简历材料，喂回去模型会照着

@@ -4,10 +4,15 @@ import { api, readJson } from "./api.js";
 
 // 当前会话 id 存 localStorage。列表不从这里来——列表是 R2 上真实存在的
 // 会话（发过第一条消息才有），这里只记「正在看哪个」。空会话不落 R2。
+const saveSid = (v) => { try { localStorage.setItem("argus_sid", v); } catch {} };
 const storedSid = () => {
-  let v = localStorage.getItem("argus_sid");
-  if (!v) { v = crypto.randomUUID(); localStorage.setItem("argus_sid", v); }
-  return v;
+  try {
+    let v = localStorage.getItem("argus_sid");
+    if (!v) { v = crypto.randomUUID(); saveSid(v); }
+    return v;
+  } catch {
+    return crypto.randomUUID();
+  }
 };
 let sid = storedSid();
 const msgs = document.getElementById("msgs");
@@ -38,6 +43,8 @@ let lastUserNode = null;
 // 否则它 2 分钟窗口内会把「原文相同的重发」刚落盘的同一回合捞回来渲染第二份
 // （线上 2026-10-21 实录：一模一样的回复出两遍，R2 只有一对）。
 let recoverGen = 0;
+let roundGen = 0;
+let historyGen = 0;
 
 const setBusy = (on) => {
   busy = on;
@@ -48,6 +55,7 @@ const setBusy = (on) => {
 
 const stop = () => {
   controller?.abort();
+  recoverGen++;
   stoppedByUser = true;
   // awaiting 保持 true：停下来就等于「AI 还没回答」，那句话仍然该能改。
   setBusy(false);
@@ -108,9 +116,12 @@ const showReply = (html, model) => {
 // 刷新后把整段对话重建出来。会话在 R2（按 sid），刷新只是丢了界面。
 // 只重建气泡：简历卡等派生 UI 不回滚，重进 Resume 页自会拉到当前版。
 const restoreHistory = async () => {
+  const gen = ++historyGen;
   try {
     const res = await api("/api/chat/messages", { headers: { "X-Session-Id": sid } });
+    if (!res.ok) return;
     const { messages } = await res.json();
+    if (gen !== historyGen || !Array.isArray(messages)) return;
     for (const m of messages) {
       if (m.role === "user") show(row("me", m.content));
       else showReply(m.html, m.model);
@@ -152,6 +163,7 @@ const TRASH_SVG = '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">'
 
 const openSide = () => app.classList.add("side-open");
 const closeSide = () => app.classList.remove("side-open");
+const closeSideOnPhone = () => { if (!matchMedia("(min-width: 768px)").matches) closeSide(); };
 const toggleSide = () => app.classList.toggle("side-open");
 
 const timeAgo = (ts) => {
@@ -173,6 +185,7 @@ const renderSessions = (list) => {
     return;
   }
   for (const s of list) {
+    if (pendingDeletes.has(s.sid)) continue;
     const item = document.createElement("div");
     item.className = "side__item" + (s.sid === sid ? " is-current" : "");
     item.dataset.sid = s.sid;
@@ -199,38 +212,53 @@ const renderSessions = (list) => {
 const loadSessions = async () => {
   try {
     const res = await api("/api/chat/sessions");
-    renderSessions((await res.json()).sessions || []);
+    if (!res.ok) return;
+    const { sessions } = await res.json();
+    if (Array.isArray(sessions)) renderSessions(sessions);
   } catch {}
 };
 
 // 切会话：换 sid、清界面、按新 sid 重建历史。简历卡是派生 UI，一起收掉。
+const abortTurn = () => {
+  controller?.abort();
+  controller = null;
+  recoverGen++;
+  roundGen++;
+  historyGen++;
+  setBusy(false);
+  pendingBubble?.remove();
+  pendingBubble = null;
+  awaiting = false;
+  stoppedByUser = false;
+};
+
 const switchSession = async (next) => {
   if (next !== sid) {
+    abortTurn();
     sid = next;
-    localStorage.setItem("argus_sid", sid);
+    saveSid(sid);
     msgs.replaceChildren();
     lastUserNode = null;
     resumeNode = null;
-    closeSide();
+    closeSideOnPhone();
     await restoreHistory();
     loadSessions();
   } else {
-    closeSide();
+    closeSideOnPhone();
   }
 };
 
 // 新建会话：只把本地 sid 换成新的，界面上回到空白。R2 要等第一条消息才落。
 // 不动列表（列表是 R2 的真实记录，没变化），只把高亮收掉——省一次慢请求。
 const resetToBlank = () => {
+  abortTurn();
   sid = crypto.randomUUID();
-  localStorage.setItem("argus_sid", sid);
+  saveSid(sid);
   msgs.replaceChildren();
   lastUserNode = null;
   resumeNode = null;
-  awaiting = false;
-  stoppedByUser = false;
   for (const el of sideList.querySelectorAll(".side__item.is-current")) el.classList.remove("is-current");
-  closeSide();
+  closeSideOnPhone();
 };
 
 const newSession = resetToBlank;
@@ -249,6 +277,7 @@ const commitDelete = async (target) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sid: target }),
     });
+    loadSessions();
   } catch {
     showToast("删除失败，请重试", null);
     loadSessions();  // 后端没删成，把列表拉回来对齐
@@ -274,7 +303,7 @@ const undoDelete = async (target) => {
   // 删的若是当前会话，删除时已切到空白——撤销要连 sid 和历史一起还回来。
   if (info.wasCurrent) {
     sid = target;
-    localStorage.setItem("argus_sid", sid);
+    saveSid(sid);
     msgs.replaceChildren();
     lastUserNode = null;
     resumeNode = null;
@@ -312,12 +341,21 @@ const hideToast = () => toastEl?.classList.remove("toast--show");
 
 // ── 改自己刚发出去、还没等到回答的那句 ──
 // 只给最后一条用户气泡加可点样式：更早的都已经有回答了，改了也没地方生效。
+const clearEditable = () => {
+  const bubble = lastUserNode?.querySelector(".bubble");
+  if (!bubble) return;
+  bubble.classList.remove("bubble--editable");
+  bubble.removeAttribute("title");
+  bubble.onclick = null;
+};
+
 const markEditable = () => {
   if (!lastUserNode) return;
   const bubble = lastUserNode.querySelector(".bubble");
   if (!bubble) return;
-  bubble.classList.toggle("bubble--editable", awaiting);
-  if (awaiting) {
+  const editable = awaiting && !busy;
+  bubble.classList.toggle("bubble--editable", editable);
+  if (editable) {
     bubble.title = "点一下改这句";
     bubble.onclick = () => startEdit(bubble);
   } else {
@@ -327,6 +365,7 @@ const markEditable = () => {
 };
 
 const startEdit = (bubble) => {
+  if (busy) return;
   const original = bubble.textContent;
   const box = document.createElement("textarea");
   box.className = "bubble--editbox";
@@ -428,8 +467,17 @@ const readStream = async (res, pending) => {
       const ev = frame.match(/^event: (.+)$/m)?.[1];
       if (!ev) continue;
       const data = JSON.parse(frame.match(/^data: (.*)$/m)?.[1] ?? "{}");
-      if (ev === "error") { const e = new Error(data.detail); e.fromServer = true; throw e; }
-      if (ev === "content") {
+      if (ev === "error") {
+        if (bubble) { bubble.closest(".msg")?.remove(); bubble = null; pendingBubble = null; raw = ""; }
+        const e = new Error(data.detail);
+        e.fromServer = true;
+        throw e;
+      }
+      if (ev === "reset") {
+        if (bubble) { bubble.closest(".msg")?.remove(); bubble = null; }
+        pendingBubble = null;
+        raw = "";
+      } else if (ev === "content") {
         if (!bubble) {
           pending?.remove();
           bubble = document.createElement("p");
@@ -459,14 +507,17 @@ const readStream = async (res, pending) => {
 // 发一轮。抽成函数是因为「改完重发」要复用同一条路径——两条路径各自维护
 // busy/awaiting 的话，迟早会漏掉一处状态。
 const sendMessage = async (message) => {
+  if (busy) return;
+  const gen = ++roundGen;
+  const recover = ++recoverGen;   // 打败之前任何一轮残留的 recoverReply
   stoppedByUser = false;
-  recoverGen += 1;   // 打败之前任何一轮残留的 recoverReply
+  clearEditable();
   const node = row("me", message);
   lastUserNode = show(node);
   awaiting = true;
+  setBusy(true);
   markEditable();
 
-  setBusy(true);
   const pending = showTyping();
   try {
     const res = await api("/api/chat/stream", {
@@ -486,9 +537,12 @@ const sendMessage = async (message) => {
     if (err.name === "AbortError") return;
     // 后端明确报错（如所有模型不可用）时它根本没存盘，轮询 2 分钟纯属白等，直接显示。
     // 只有连接被掐（无 error 事件）才去捞，捞不回来才报原始错误，别把真错误盖掉。
-    if (err.fromServer || !(await recoverReply(message, recoverGen))) show(row("them", `我说不了话：${err.message}`));
+    const recovered = err.fromServer ? false : await recoverReply(message, recover);
+    if (gen !== roundGen) return;
+    if (err.fromServer || !recovered) show(row("them", `我说不了话：${err.message}`));
   } finally {
     pending.remove();
+    if (gen !== roundGen) return;
     if (busy) setBusy(false);
     // 主动停掉的：awaiting 留着，用户那句话还能改；自己答完的：收回可编辑。
     if (!stoppedByUser) awaiting = false;

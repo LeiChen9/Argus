@@ -16,6 +16,7 @@ critique **只拿到职能要求和简历成品**，没有 persona——它模�
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -32,6 +33,13 @@ ROOT = Path(__file__).resolve().parents[1]
 CAREERS = ROOT / "data" / USER / "careers.json"
 RESUME_DIR = ROOT / "data" / USER / "resumes"
 RESUME_PREFIX = "resumes/"
+_CAREER_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def resume_file(career_id: str) -> Path:
+    if not _CAREER_RE.fullmatch(career_id or ""):
+        raise ValueError(f"career_id 不合法：{career_id!r}")
+    return RESUME_DIR / f"{career_id}.json"
 
 # persona 的求职意向三个字段不属于简历。拷贝时剔掉。
 TARGET_KEYS = ("target", "target_base", "target_salary")
@@ -73,7 +81,7 @@ async def copy_from_persona(career_id: str) -> dict:
     if not persona.get("work_history"):
         raise ValueError("还没有 persona，先让他传一份简历")
     career = {c["career_id"]: c for c in load_file(CAREERS)["careers"]}[career_id]
-    return await save_file_async(RESUME_DIR / f"{career_id}.json", {
+    return await save_file_async(resume_file(career_id), {
         "career_id": career_id,
         "career_name": career["name"],
         "updated_at": time.strftime("%Y-%m-%d %H:%M"),
@@ -91,7 +99,7 @@ async def apply_edits(career_id: str, ops: list, reason: str) -> dict:
     load→patch→save 是读改写：单用户下同 sid 串行，竞争不可达；真有多端
     并发那天，上 R2 的条件写（etag）而不是在这里加锁。
     """
-    path = RESUME_DIR / f"{career_id}.json"
+    path = resume_file(career_id)
     saved = load_file(path)
     if not saved:
         raise FileNotFoundError(f"{career_id} 还没有简历")
@@ -154,7 +162,11 @@ async def ensure_all() -> list[dict]:
     careers = (load_file(CAREERS) or {}).get("careers", [])
     if get_persona().get("work_history"):
         for career in careers:
-            if not load_file(RESUME_DIR / f"{career['career_id']}.json"):
+            try:
+                path = resume_file(career["career_id"])
+            except (KeyError, ValueError):
+                continue
+            if not load_file(path):
                 await copy_from_persona(career["career_id"])
     return list_resumes()
 
@@ -165,7 +177,7 @@ def document(career_id: str) -> dict | None:
     career_id / career_name / updated_at 存在**文档层**、不在 resume 层（见 copy_from_persona），
     但 Chat 的卡片和 Resume 页的详情都要显示它们。在这儿拼一次，别让每个调用方自己记得补。
     """
-    saved = load_file(RESUME_DIR / f"{career_id}.json")
+    saved = load_file(resume_file(career_id))
     if not saved:
         return None
     return ({**saved["resume"]}
@@ -188,7 +200,7 @@ def body(saved: dict) -> str:
 
 async def critique(career_id: str) -> dict:
     """筛简历。输入只有「职能要求 + 简历成品」，没有原始履历。"""
-    path = RESUME_DIR / f"{career_id}.json"
+    path = resume_file(career_id)
     saved = load_file(path)
     career = {c["career_id"]: c for c in load_file(CAREERS)["careers"]}[career_id]
 
@@ -233,6 +245,7 @@ async def critique(career_id: str) -> dict:
         "<简历>\n" + body(saved) + "\n</简历>",
     ], temperature=0.3, model=MODEL)
 
+    saved = load_file(path) or saved
     now = time.strftime("%Y-%m-%d %H:%M")
     latest = {"at": now, **{k: report.get(k, "") for k in
                             ("verdict", "first_screen", "fixable", "needs_mining", "one_line")}}

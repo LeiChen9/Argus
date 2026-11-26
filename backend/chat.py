@@ -18,6 +18,7 @@ from common import render_markdown, call_llm_async, call_llm_stream_async
 from sessions import (
     load as _load_session, save as _save_session,
     list_all as _list_sessions, delete as _delete_session,
+    lock as _session_lock,
 )
 from utils import load_file
 from tools import (
@@ -26,10 +27,10 @@ from tools import (
 )
 from resume import (
     DIRECTIVE,
-    RESUME_DIR,
     body as resume_body,
     document,
     list_resumes,
+    resume_file,
 )
 
 logger = logging.getLogger("argus.chat")
@@ -56,7 +57,12 @@ read_resume(career_id) 读 data/resumes 下他自己改过的那份简历。没�
 async def _current_resume(sid: str) -> dict | None:
     sess = await _load_session(sid)
     rc = sess.get("resume_career")
-    return load_file(RESUME_DIR / f"{rc}.json") if rc else None
+    if not rc:
+        return None
+    try:
+        return load_file(resume_file(rc))
+    except ValueError:
+        return None
 
 
 async def _system_prompt(sid: str) -> str:
@@ -197,7 +203,12 @@ async def _execute_tool(sid: str, name: str, args: dict) -> tuple[dict, list[dic
     return result, None
 
 
-async def answer(sid: str, message: str, on_delta=None) -> dict:
+async def answer(sid: str, message: str, on_delta=None, on_reset=None) -> dict:
+    async with _session_lock(sid):
+        return await _answer(sid, message, on_delta=on_delta, on_reset=on_reset)
+
+
+async def _answer(sid: str, message: str, on_delta=None, on_reset=None) -> dict:
     """一轮对话：agent loop（≤4 步工具）→ 落会话 → 拼响应。
 
     on_delta 非空走流式传输。与原 chat.py::chat_stream 的口径一致：**先落会话
@@ -216,7 +227,8 @@ async def answer(sid: str, message: str, on_delta=None) -> dict:
     for _ in range(MAX_TOOL_STEPS):
         if on_delta is not None:
             msg = await call_llm_stream_async(messages, on_delta, tools=TOOLS, max_tokens=4096,
-                                              pinned=pin, allow_endpoints=common.CHAT_ENDPOINTS)
+                                              pinned=pin, on_reset=on_reset,
+                                              allow_endpoints=common.CHAT_ENDPOINTS)
         else:
             msg = await call_llm_async(messages, tools=TOOLS, max_tokens=4096,
                                        pinned=pin, allow_endpoints=common.CHAT_ENDPOINTS)
@@ -246,7 +258,10 @@ async def answer(sid: str, message: str, on_delta=None) -> dict:
 async def _messages(sid: str, message: str) -> list[dict]:
     """一轮对话要发给模型的消息。流式和非流式共用。"""
     sess = await _load_session(sid)
+    before = len(sess["history"])
     history = await auto_compact(sess["history"])
+    if len(sess["history"]) != before:
+        await _save_session(sid, sess)
     # 落盘的 assistant 条目带 model（前端灰字用），发给 provider 前剔掉——未知字段
     # 会被部分 provider 400。只留消息协议的三件套。
     history = [{k: v for k, v in m.items() if k in ("role", "content", "tool_calls")} for m in history]

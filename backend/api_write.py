@@ -8,6 +8,7 @@
 
 from workers import Response
 
+import common
 import resume
 from persona import init_persona_from_text, read_upload, save_targets
 
@@ -31,18 +32,29 @@ async def persona_init(request) -> Response:
         if f is None:
             raise Bad("没有 file 字段")
         text = read_upload(f.name, await f.bytes())
+    except Bad:
+        raise
     except ValueError as e:
         raise Bad(str(e))
+    except Exception:
+        raise Bad("简历上传失败")
     try:
         return Response.json(await init_persona_from_text(text))
     except Exception as e:
         # LLM 全链挂掉或 JSON 修不回来：与从前 FastAPI 版的 502 口径一致。
         return Response.json({"detail": f"LLM 解析失败：{e}"}, status=502)
+    finally:
+        await common.flush_usage()
 
 
 async def persona_targets(request) -> Response:
     """PATCH /api/persona/targets：只改求职意向三个字段。"""
-    body = await request.json()
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError
+    except Exception:
+        raise Bad("请求体不是合法 JSON")
     return Response.json(await save_targets(
         body.get("target") or [],
         body.get("target_base") or "",
@@ -52,14 +64,22 @@ async def persona_targets(request) -> Response:
 
 async def resume_edits(career_id: str, request) -> Response:
     """POST /api/resumes/{id}/edits：用户在 Resume 页的手改，ops 照单落盘。"""
-    body = await request.json()
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError
+    except Exception:
+        raise Bad("请求体不是合法 JSON")
     ops = body.get("ops") or []
-    if any(op.get("op") not in VALID_OPS or not op.get("path") for op in ops):
+    if not isinstance(ops, list) or any(not isinstance(op, dict) or op.get("op") not in VALID_OPS or not op.get("path") for op in ops):
         raise Bad("ops 只能是 set/add/remove/move 且必须带 path")
     try:
-        return Response.json(await resume.apply_edits(
-            career_id, ops, body.get("reason") or "手动编辑"))
+        await resume.apply_edits(career_id, ops, body.get("reason") or "手动编辑")
+        doc = resume.document(career_id)
     except FileNotFoundError as e:
         return Response.json({"detail": str(e)}, status=404)
-    except ValueError as e:
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
         return Response.json({"detail": str(e)}, status=400)
+    if not doc:
+        return Response.json({"detail": f"{career_id} 还没有简历"}, status=404)
+    return Response.json(doc)

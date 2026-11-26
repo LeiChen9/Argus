@@ -59,3 +59,8 @@ addEventListener("popstate", () => {
   const name = route();
   if (name) onRoute(name);
 });
+
+const wide = matchMedia("(min-width: 768px)");
+wide.addEventListener("change", () => {
+  if (cur === "chat") app?.classList.toggle("side-open", wide.matches);
+});

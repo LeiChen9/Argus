@@ -12,7 +12,7 @@
    委托，不用给每个输入框绑一遍。ops 攒到提交时才发，连改三个字段算一次改动。 */
 
 import { el } from "./dom.js";
-import { go, back as navBack, onLeave } from "./nav.js";
+import { go, back as navBack, onLeave, routeId } from "./nav.js";
 import { loadIndex, work } from "./resume.js";
 import { api, errNote } from "./api.js";
 
@@ -121,18 +121,23 @@ const push = (op) => {
 };
 
 const post = async (id, batch) => {
-  const res = await api(`/api/resumes/${encodeURIComponent(id)}/edits`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ops: batch, reason: `手改 ${batch.length} 处` }),
-  });
-  if (!res.ok) {
-    const doc = await res.json().catch(() => ({}));
-    say(`没存上：${doc.detail || res.status}`, true);
+  try {
+    const res = await api(`/api/resumes/${encodeURIComponent(id)}/edits`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ops: batch, reason: `手改 ${batch.length} 处` }),
+    });
+    if (!res.ok) {
+      const doc = await res.json().catch(() => ({}));
+      say(`没存上：${doc.detail || res.status}`, true);
+      return null;
+    }
+    say("");
+    return await res.json();
+  } catch (e) {
+    say(`没存上：${e.message || e}`, true);
     return null;
   }
-  say("");
-  return res.json();
 };
 
 const flush = () => {
@@ -141,8 +146,8 @@ const flush = () => {
   const id = currentId;
   ops.clear();
   if (!batch.length) return Promise.resolve(null);
-  chain = chain.then(async () => {
-    const doc = await post(id, batch);
+  chain = chain.catch(() => null).then(async () => {
+    const doc = await post(id, batch).catch(() => null);
     if (doc && id === currentId) state = doc;
     // ops 在 POST 之前就清了。存上就接着新真相画，没存上就退回旧真相——
     // 页面从此看到的和服务器上的永远是同一份。
@@ -399,8 +404,8 @@ const show = async (id) => {
   const doc = await api(`/api/resumes/${encodeURIComponent(id)}`)
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null);
-  // 简历可能刚被删掉：留在原地，别开一个空页
-  if (!doc) return;
+  // 简历可能刚被删掉，或用户已经离开详情页：留在原地，别开一个空页
+  if (!doc || routeId() !== id) return;
   shown = id;
   editing = null;
   state = doc;

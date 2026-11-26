@@ -4,9 +4,10 @@ import { loadJobs } from "./jobs.js";
 import { loadCareer } from "./career.js";
 import { initJobDetail, openJob } from "./job.js";
 import { loadResume, initResumeDetail, openResume } from "./resumepage.js";
-import { loadMe, onAuthChange } from "./me.js";
+import { loadMe, onAuthChange } from "./me.js?v=20261126g";
 import { whenUnauthorized } from "./api.js";
 import { initChat } from "./chat.js";
+import { maybeShowIntro } from "./intro.js?v=20261126g";
 
 initJobDetail();
 initResumeDetail();
@@ -23,22 +24,28 @@ const span = (className, text) => {
 const { lead, hook } = greeting();
 el.replaceChildren(span("greet__lead", lead), span("greet__hook", hook));
 
-// 会话失效（cookie 没了、别人登了同一个账号）就把人送回 Me 页重新登录：
-// 其余页面留着只会各自弹一个报错，没人知道该干嘛。
-whenUnauthorized(() => { go("me"); loadMe(); });
+// 受保护页面遇到 401 就送回 Me 页重新登录；首页和 Me 自身不跳，避免冷启动时把游客弹去注册。
+whenUnauthorized(() => {
+  if (route() === "home" || route() === "me") return;
+  go("me");
+  loadMe();
+});
 
-// 未登录时不许进别的页面：它们每个都会各自弹一句「没登录」，不如直接把人
-// 送到 Me 页。登录后这个限制自然解除（登录本来就是在那儿完成的）。
+// 未登录时也先让游客看首页，点受保护入口时再去 Me 页登录。
 let loggedIn = false;
 onAuthChange((on) => {
   loggedIn = on;
-  if (!on) go("me");
-  else initChat();
+  if (on) initChat();
+  else if (route() !== "home") go("me");
 });
 
 // 导航：底部 tabbar 去掉了，入口集中在首页那一排。
 const enter = (view) => {
-  if (view !== "me" && !loggedIn) { go("me"); return; }
+  if (!loggedIn && view !== "home" && view !== "me") {
+    if (view === "chat") sessionStorage.setItem("argus_after_login", "chat");
+    go("me");
+    return;
+  }
   go(view);
   if (view === "resume") loadResume();
   if (view === "jobs") loadJobs();
@@ -60,7 +67,16 @@ for (const item of document.querySelectorAll(".homenav__item")) {
 document.getElementById("toplogo").addEventListener("click", () => go("home"));
 
 // 进站先认一下身份：按地址栏路径落到对应页面（拿来就能直达 /chat、/jobs…），
-// 没登录的一律被 enter 的闸门送去 Me 页。
-loadMe().then((box) => {
-  enter(route() || (box.querySelector(".meform") ? "me" : "home"));
+// 没登录的受保护页面会被 enter 的闸门送去 Me 页。
+const boot = loadMe().then(() => {
+  enter(route() || "home");
+});
+
+maybeShowIntro(async () => {
+  await boot;
+  if (loggedIn) enter("chat");
+  else {
+    sessionStorage.setItem("argus_after_login", "chat");
+    enter("chat");
+  }
 });

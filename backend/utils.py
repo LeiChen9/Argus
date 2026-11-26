@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
 
@@ -24,18 +25,17 @@ _DATA = _HERE.parent / "data"
 # ── R2 只读缓存（Worker 模式）────────────────────────────────────────────
 #
 # Worker 没有文件系统：entrypoint_worker._refresh 每个数据请求前从 R2 并行拉
-# 全量文本灌进这里，load_file 优先查缓存，未命中退回本地文件。离线脚本从不
-# 灌缓存，逐字节走老路。
+# 全量文本灌进这里。Worker 模式下未命中就是没有，绝不退回本地文件；离线脚本
+# 从不灌缓存，逐字节走本地老路。
 #
 # 缓存的是 text 不是 dict：领域函数照旧自己 json.loads，读哪份、读几次仍是
 # 领域自己的事，缓存层不插足。（解析亚毫秒，已实测。）
-_store: dict[str, str] = {}
+_STORE: ContextVar[dict[str, str] | None] = ContextVar("argus_store", default=None)
 
 
 def bind_store(texts: dict[str, str]) -> None:
     """整罐替换 store。Worker 每请求刷新时调；离线模式不调用。"""
-    _store.clear()
-    _store.update(texts)
+    _STORE.set(dict(texts))
 
 
 # ── 用户命名空间 ────────────────────────────────────────────────────────
@@ -45,22 +45,22 @@ def bind_store(texts: dict[str, str]) -> None:
 # jobs/persona/resume 照旧说 data/careers.json，这里替它加上 lbb/ 前缀。
 #
 # 离线脚本不 bind（_USER 为空），前缀为空，老路径逐字节不变。
-_USER = ""
+_USER: ContextVar[str] = ContextVar("argus_user", default="")
 
 
 def bind_user(username: str) -> None:
     """entrypoint 每请求解析出用户名后调。空串=未登录（回退到无前缀，等同离线）。"""
-    global _USER
-    _USER = username or ""
+    _USER.set(username or "")
 
 
 def current_user() -> str:
-    return _USER
+    return _USER.get()
 
 
 def user_prefix() -> str:
     """R2 上该用户的命名空间。空用户返回空串，key 保持原样。"""
-    return f"{_USER}/" if _USER else ""
+    user = _USER.get()
+    return f"{user}/" if user else ""
 
 
 def put_store(key: str, text: str) -> None:
@@ -69,13 +69,15 @@ def put_store(key: str, text: str) -> None:
     ensure_all 建档后当场列列表就靠这个——store 是请求开始时灌的快照，
     不补这一笔，刚建的底稿在本请求里不存在。
     """
-    _store[key] = text
+    store = _STORE.get()
+    if store is not None:
+        store[key] = text
 
 
 def store_active() -> bool:
     """是否 Worker 模式（store 被灌过）。领域模块据此切换双模式行为，
     典型是 persona 的单例：Worker 的 isolate 跨请求复用，单例会吐旧数据。"""
-    return bool(_store)
+    return _STORE.get() is not None
 
 
 def list_store_keys(prefix: str) -> list[str]:
@@ -84,8 +86,10 @@ def list_store_keys(prefix: str) -> list[str]:
     收进来的 prefix 是逻辑前缀（领域模块只认「resumes/」），拼上用户命名空间
     再去 store 里筛。回的是逻辑 key，调用方（resume.py）只取 basename。
     """
-    full = user_prefix() + prefix
-    return [k[len(_USER) + 1:] for k in _store if k.startswith(full)]
+    store = _STORE.get() or {}
+    base = user_prefix()
+    full = base + prefix
+    return [k[len(base):] for k in store if k.startswith(full)]
 
 
 def _store_key(path: Path) -> str | None:
@@ -100,9 +104,10 @@ def _store_key(path: Path) -> str | None:
     if not p.is_relative_to(_DATA):
         return None
     head, _, tail = p.relative_to(_DATA).as_posix().partition("/")
-    if _USER and tail:
-        return f"{_USER}/{tail}"
-    return f"{head}/{tail}" if tail else head
+    if not tail:
+        return None
+    user = _USER.get()
+    return f"{user}/{tail}" if user else f"{head}/{tail}"
 
 
 # ── 写通道（Worker 模式）───────────────────────────────────────────────
@@ -133,9 +138,10 @@ async def save_file_async(path: Path, payload: dict) -> dict:
 
 
 def load_file(path: Path) -> dict | None:
-    key = _store_key(path)
-    if key is not None and key in _store:
-        return json.loads(_store[key])
+    store = _STORE.get()
+    if store is not None:
+        key = _store_key(path)
+        return json.loads(store[key]) if key is not None and key in store else None
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 

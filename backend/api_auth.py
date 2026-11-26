@@ -4,20 +4,18 @@
 东西——users.json 一眼可查，出问题也不用 debug。代价是 R2 里的密码可还原，
 所以这个 bucket 只能私有、users.json 绝不经任何 API 回吐。
 
-会话身份靠 cookie（argus_user=<用户名>）：登录时种、登出时清，浏览器每次请求
-自动带上，比 header 少一半前端代码。没有 expiry——明文密码本来也没有过期语义。
+会话身份靠随机 token cookie（argus_user_v2=<token>）：登录时签发并写 R2，
+登出时删除；浏览器每次请求自动带上，一年后过期。
 """
 
-import json
-import re
+import json, re, secrets, time
 
 from workers import Response
 
 USERS_KEY = "users.json"
-# **会话 cookie**（没有 Max-Age）：浏览器关掉就没了，下次打开是空账户，要重新
-# 登录。Cookie 名带版本号是故意的：上一版用的是一年期的 argus_user，换个名字
-# 等于把所有人立刻踢回未登录，不然「Max-Age 去掉了但旧 cookie 还在」会让人
-# 以为没改成功。登出会显式写一个空的过期 cookie，不需要等它自然过期。
+# **会话 cookie**（一年）：存的是随机 token，不是用户名。Cookie 名带版本号是
+# 故意的：上一版存的是用户名，换个名字等于把所有人立刻踢回未登录。登出会删
+# 掉 R2 里的 token，并显式写一个空的过期 cookie。
 COOKIE = "argus_user_v2"
 
 # 职位库和职能地图是**共享资产**（crawler 抓来的岗位侧数据，不含任何个人信息），
@@ -28,7 +26,7 @@ SEED_FILES = ("careers.json", "boss_jobs.json")
 
 # 用户名约束：R2 key 是路径，斜杠会把命名空间劈开；留白/怪字符会让 cookie 和
 # key 都难用。够用即可，不是安全边界（真正的边界是密码）。
-_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,24}$")
+_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,23}$")
 MIN_PASSWORD = 1
 
 _env = None
@@ -38,6 +36,27 @@ def bind_r2(env) -> None:
     """entrypoint 加载时注入 users.json 的 R2 环境。"""
     global _env
     _env = env
+
+
+async def _issue(name: str) -> str:
+    token = secrets.token_urlsafe(32)
+    await _env.DATA.put(f"_sessions/{token}.json", json.dumps({"user": name, "exp": time.time() + 31536000}))
+    return token
+
+
+async def resolve(token: str) -> str:
+    try:
+        obj = await _env.DATA.get(f"_sessions/{token}.json")
+        row = json.loads(await obj.text()) if obj else {}
+    except Exception:
+        return ""
+    if not isinstance(row, dict):
+        return ""
+    try:
+        exp = float(row.get("exp") or 0)
+    except (TypeError, ValueError):
+        return ""
+    return row.get("user", "") if exp > time.time() else ""
 
 
 class Bad(Exception):
@@ -54,10 +73,12 @@ async def load_users() -> dict:
     if obj is None:
         return {}
     try:
-        return json.loads(await obj.text())
-    except Exception:
-        # 读坏了当空表：让人能重新注册，而不是整个站都打不开。
-        return {}
+        users = json.loads(await obj.text())
+    except Exception as e:
+        raise RuntimeError("用户表读取失败，拒绝覆盖写入") from e
+    if not isinstance(users, dict):
+        raise RuntimeError("用户表格式不对，拒绝覆盖写入")
+    return users
 
 
 async def save_users(users: dict) -> None:
@@ -81,7 +102,7 @@ async def register(body: dict) -> Response:
     users[name] = password
     await save_users(users)
     await _seed_shared(name)
-    return Response.json({"ok": True, "user": name}, headers=_cookie_header(name))
+    return Response.json({"ok": True, "user": name}, headers=_cookie_header(await _issue(name)))
 
 
 async def _seed_shared(name: str) -> None:
@@ -101,10 +122,14 @@ async def login(body: dict) -> Response:
         raise Bad("用户名或密码不对", status=401)
     if users[name] != password:
         raise Bad("用户名或密码不对", status=401)
-    return Response.json({"ok": True, "user": name}, headers=_cookie_header(name))
+    return Response.json({"ok": True, "user": name}, headers=_cookie_header(await _issue(name)))
 
 
-async def logout() -> Response:
+async def logout(token: str) -> Response:
+    try:
+        await _env.DATA.delete(f"_sessions/{token}.json")
+    except Exception:
+        pass
     return Response.json({"ok": True}, headers=_cookie_header(""))
 
 

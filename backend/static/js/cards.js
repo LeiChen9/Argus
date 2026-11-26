@@ -14,11 +14,12 @@ export const jobCard = (job) => {
   a.innerHTML =
     '<div class="jobcard__top"><span class="jobcard__title"></span><span class="jobcard__salary"></span></div>' +
     '<p class="jobcard__company"></p><p class="jobcard__meta"></p><p class="jobcard__foot"></p>';
-  a.querySelector(".jobcard__title").textContent = job.title;
-  a.querySelector(".jobcard__salary").textContent = job.salary;
-  a.querySelector(".jobcard__company").textContent = job.company;
+  a.querySelector(".jobcard__title").textContent = job.title ?? "";
+  a.querySelector(".jobcard__salary").textContent = job.salary ?? "";
+  a.querySelector(".jobcard__company").textContent = job.company ?? "";
   a.querySelector(".jobcard__meta").textContent = [job.location, job.tags].filter(Boolean).join(" · ");
-  a.querySelector(".jobcard__foot").textContent = `${SOURCE[job.source] ?? job.source} · ${job.collected_at ?? ""}`;
+  a.querySelector(".jobcard__foot").textContent =
+    [SOURCE[job.source] ?? job.source, job.collected_at].filter(Boolean).join(" · ");
   return a;
 };
 

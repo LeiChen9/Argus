@@ -69,11 +69,11 @@ backend/
   api_read.py                  只读 API：jobs / careers / persona / me / resumes
   api_chat.py                  chat HTTP 层：四端点、SSE（TransformStream + 5s 心跳）
   api_write.py                 写路径：persona 上传/意向、resume 手改
-  sessions.py                  会话存取：R2 chat_sessions/{sid}.json（无 TTL，用户自删）
+  sessions.py                  会话存取：R2 users/<user>/chat_sessions/{sid}.json（无 TTL）
   chat.py                      Agent 循环、工具注册表、system prompt 拼装
   tools.py                     Agent 工具实现：只读工具、analyze_jd、auto_compact
   jobs.py                      岗位领域：normalize、save_snapshot、job_cards、career_documents
-  crawler.py                   BOSS CDP 采集 + 猎聘回退（只归离线）
+  crawler.py                   BOSS CDP 采集（只归离线）
   persona.py                   简历解析与 Persona（async 写，R2/本地双模式）
   resume.py                    简历领域：底稿、apply_edits、critique（async 写）
   common.py                    .env/secret 读取、容灾链（双传输）、markdown、token 启发式
@@ -84,7 +84,9 @@ python_modules/                vendor 的 workers-py SDK 与应用依赖（gitig
 scripts/
   build_careers.py             岗位 → ≤3 个 Career（可丢弃）
   extract_capabilities.py      逐 Career 抽能力
-  cluster_jobs.py              legacy gaps，已停用
+  crawl_jobs.py                桌面采集：推荐流 → 详情 JD → boss_jobs.json
+  crawl_jobs.sh                采集 + r2_push 一条命令
+  setup_boss.sh                一次性启动独立 Chrome 登录 BOSS
   r2_pull.sh                   Web 写的拉回本地
   r2_push.sh                   离线产物推上 R2
 tech_doc.md         本文件
@@ -95,7 +97,7 @@ dev_log.md          开发日志
 
 **设计系统移植自 `../FluentChat/site/`**，不重复造轮子。移植进来的那部分
 （首页 + Chat + tabbar）与上游逐字节相同，回上游取改动时 `diff` 一下就知道我们改过哪。
-往后追加的段落（岗位详情、AI 解读）是我们自己的，**不承诺与上游一致**。
+往后追加的段落（岗位详情）是我们自己的，**不承诺与上游一致**。
 
 底部四个 tab 是产品结构，不是实现细节：
 
@@ -176,7 +178,6 @@ bash scripts/r2_push.sh
 # 管线
 python3 scripts/build_careers.py           # 岗位 → ≤3 个 Career，允许丢弃
 python3 scripts/extract_capabilities.py    # 逐 Career 抽能力
-python3 scripts/cluster_jobs.py            # legacy，已停用
 ```
 
 Career 上限 3 个（`build_careers.py::MAX_CAREERS`）：招聘平台只让留 3 份简历，
@@ -186,27 +187,24 @@ Career 上限 3 个（`build_careers.py::MAX_CAREERS`）：招聘平台只让留
 
 **2026-10-16 迁移完成，本机不再是运行时。** 入口
 `https://argus-web.luent-hat.workers.dev`（Worker，免费档）。所有请求先过
-登录：用户名 + 密码比对 R2 的 users.json（明文），成功种 HttpOnly 会话 cookie；
-站级没有 access code——网址本身就是唯一的秘密，拿到网址的人只能看见登录页
-`ACCESS_CODE`——Worker 持有六家 LLM key，不设防等于公开调用权。
+登录：用户名 + 密码比对 `_auth/users.json`（明文），成功后签发随机 token cookie；
+站级没有 access code——网址本身就是唯一的秘密。
 
 - **形态**：Workers Static Assets（`backend/static` 原样托管，SPA 回退）
   + Python Worker（`compatibility_flags: ["python_workers"]`，入口
   `backend/entrypoint_worker.py`）。FastAPI / uvicorn 已退役。
-- **数据在 R2**（bucket `argus-data`，私有）：key = `careers.json` /
-  `boss_jobs.json` / `persona.json` / `resumes/*.json` / `chat_sessions/*.json`。
-  每个数据请求前 `_refresh` 全量灌进 `utils` 的 store（<300KB，R2 往返约
-  200ms，I/O 不计 CPU），领域函数 `load_file` 缓存优先、未命中退本地——
-  **离线与 Worker 跑同一份代码**，`store_active()` 切双模式。写路径同构：
-  `save_file_async` 经注入的 writer 落 R2，写后同步进 store（同请求的后续
-  读取要看得见刚写的内容）。
+- **数据在 R2**（bucket `argus-data`，私有）：用户资产在 `users/<user>/`，
+  登录态在 `_auth/`。每个数据请求前 `_refresh` 全量灌进 `utils` 的 store
+  （<300KB，R2 往返约 200ms，I/O 不计 CPU），领域函数 `load_file` 缓存优先；
+  Worker 模式下未命中就是没有，不会回退本地文件。写路径同构：
+  `save_file_async` 经注入的 writer 落 R2，写后同步进 store。
 - **LLM 双传输**：pyodide 装不了 openai（httpx 依赖 socket），Worker 侧
   `js.fetch` 直打各家 OpenAI 兼容端点；容灾链主循环只有一份（`_run_chain`），
   传输以回调注入。离线脚本照旧走 SDK（同步入口 `call_llm`，asyncio.run 包装）。
   token 估算用字符启发式（tiktoken 有 Rust 扩展装不了）：西文 4 字符/token、
   CJK 1 字/token，刻意高估。Gemini 3 多轮工具调用必须原样回带 tool_calls 的
   `thought_signature`，重建三件套会 400。
-- **session 落 R2**：`sessions.py`，`chat_sessions/{sid}.json`，**没有 TTL**——
+- **session 落 R2**：`sessions.py`，`users/<user>/chat_sessions/{sid}.json`，**没有 TTL**——
   会话是侧栏里看得见、能自己删的东西，静默过期反而是数据丢失。免费档请求散在
   多个边缘节点，内存会话十次有九次恢复不到——这就是它必须在 R2 的原因。
 - **Python 依赖** vendor 在 `python_modules/`（workers-py SDK + chinese-calendar
@@ -216,10 +214,8 @@ Career 上限 3 个（`build_careers.py::MAX_CAREERS`）：招聘平台只让留
   （`AGNES_API_KEY` 等，名字见 `common.ENDPOINTS`）。本地开发用 `.dev.vars`。
 - **部署**：`CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy`。验 bundle 不泄密：
   `wrangler deploy --dry-run --outdir d` 后 grep `.env`。
-- **排障**：`NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:8118 npx wrangler
-  tail`（本地网络直连不上 tail 端点，必须走 8118 代理）；chat 响应自带
-  `model`/`chain`/`session_backend` 诊断字段；`GET /api/ping` 带分步耗时与
-  chain trace；`POST /api/debug/llm` 可指定模型/pinned 单发。
+- **排障**：chat 响应自带 `model`/`chain`/`session_backend` 诊断字段；
+  已登录时 `GET /api/ping` 带分步耗时；`POST /api/debug/llm` 可指定模型/pinned 单发。
 - **免费档实测边界**（2026-10-16）：10ms CPU/请求。读取路径（refresh + 解析 +
   markdown）稳定通过；token 启发式曾是 CPU 炸弹（逐字符 Python 循环，实测
   1101 超限），改 C 级 encode 后 18.5ms→0.13ms。LLM 等待是 I/O 不计 CPU。
@@ -237,7 +233,7 @@ Career 上限 3 个（`build_careers.py::MAX_CAREERS`）：招聘平台只让留
   一行没动，长按/右键行为照旧
 - **岗位本体不需要新后端接口**：`jd` 全文一直存在 `data/boss_jobs.json` 里，`/api/jobs`
   本来就全量返回。`cards.js` 渲染时顺手 `remember(job)` 存进内存，深链接直接命中，
-  未命中的才回落到 `/api/jobs`。（AI 解读是另一份数据，另走一个接口，见下节）
+  未命中的才回落到 `/api/jobs`。
 - `job` 视图必须和 Chat 一样归入「沉浸式」（隐藏 tabbar）：否则在详情页点 Jobs tab
   会撞上 `app.js` 里「已选中就 return」的短路，卡在原地回不去
 - 后退优先交给 `history.back()`（iPhone 侧滑返回才对得上），直接粘链接进来的场景
@@ -247,60 +243,6 @@ Career 上限 3 个（`build_careers.py::MAX_CAREERS`）：招聘平台只让留
 - `normalize()` 原本丢弃了 `company_scale / company_stage / company_industry /
   welfare / boss_title / job_labels / skills` —— 抓取器一直在返回（`map_api_job`），
   只是没存。补上后需**重跑一次采集**才有数据，详情页对缺失字段整行跳过
-
-### AI 解读（2026-10-09）
-
-`scripts/cluster_jobs.py` 跑出的 `data/job_gaps.json`（438KB / 30 岗位 ≈ 15KB 每岗）
-接进详情页，位置在 **JD 原文之后**。
-
-**默认形态：JD 展开，解读折叠。** JD 是投递的原始依据，解读是模型的推论——
-折叠起来让用户自己决定什么时候看，而不是被推着先读一段 AI 的话。折叠头只给
-结论徽标（「长期储备」这类），点开才是完整解读。
-
-**数据通道：单岗位接口，不并入 `/api/jobs`。**
-`GET /api/jobs/{job_id}/analysis` → `{job_id, generated_at, model, analysis, target}`。
-
-- 全量 `/api/gaps` 不划算：438KB 一次性下发，且岗位刷新后解读不跟着更新。
-  单岗位约 15KB，懒加载，详情页 `render()` 后异步补进来
-- **必须带上 `target`**（`target_base` / `target_salary`）。`intent_match` 只给
-  `aligned` / `above_target` 这类状态，**没说是跟什么对齐**——不下发目标值就只能显示
-  「已对齐」这种没主语的词。前端拼成「地点符合你的意向 上海」这种整句
-- **`analysis` 原样透传，不在后端归一化**
-
-**LLM 输出的键不齐，前端一律 `??` 兜底。**
-
-| 现象 | 实测 | 处理 |
-|---|---|---|
-| `openning` 写成 `opening` | 1/30 岗位 | `a.openning ?? a.opening` |
-| `defensive_script` 有四种键变体 | 76 条**全都**带 `mitigation_angle`，其余是重复而非替代 | 只读 `mitigation_angle` |
-| `gap_details` 只有 `has_gap` | 43/293 条要求 | 缺口文案与难度都按可选渲染 |
-| 引用 JD 原文带康熙部首 | 23 处 | `deRadical` 也要过解读文本，不只 JD |
-
-**不要把这些归一化搬到后端。** 后端归一化等于把这一批的脏数据固化成 API 契约，
-重跑 cluster 后还得再改一次；放前端读时兜底，重跑即自愈。
-
-**分层：core 展开，非 core 折叠。**
-
-- 概览卡片统计**全部**要求（分母诚实），但只列 `core` 行的明细。
-  `important` / `bonus` 不影响「投不投」的判断，收进一个 `<details>`
-- 每种匹配状态一张卡，带一句「凭什么」：`已证明 / 有直接对应的经历`。
-  光有「已证明」三个字看不出是拿什么证明的。原来的 6px 细条 + 小字图例在手机上
-  很难受，四种颜色得盯着 6px 去分辨
-- **补齐行动按 `bridge_difficulty` 降序排**（难补的排前面）。行动条目通过
-  `target_gap_tag` 反查要求里的难度，两边靠这个 tag 关联
-- 折叠一律用原生 `<details>`：键盘与读屏行为免费，不需要自己写 accordion
-
-**状态色都过 4.5:1（对白底）**，小字可直接用不必再套底色：
-`#2e6b4f` 6.30 / `#a03d33` 6.54 / `#6b6259` 5.97 / `--accent` 4.71。
-
-**前端领域切分**：`job.js` 只管岗位本体与路由，`analysis.js` 只管解读渲染，
-`el` / `deRadical` / `fold` 提到 `dom.js` 共用——否则会形成
-`analysis ← job ← analysis` 的循环依赖。
-
-**未验证**：这套布局**没有在真机浏览器里看过**。已做的验证：后端经 `TestClient`
-与重启后的 7800 实测；前端用临时 DOM shim 跑通 30 个岗位（卡片数字与数据逐岗对账、
-段宽合计 100%、无 `undefined`/`[object` 泄漏、复制文案与清单一致）。
-卡片的实际视觉与折叠头箭头位置仍需真机确认。
 
 ## Career 页（2026-10-10）
 
@@ -322,7 +264,7 @@ Career 上限 3 个（`build_careers.py::MAX_CAREERS`）：招聘平台只让留
 **定位与判据必须常驻。** 它俩是判断「这些岗位是不是同一个 Career」的唯一依据，藏进折叠里
 等于没写；能力清单和岗位列表是查表用的，默认全收，页面首屏能纵览全部 Career。
 
-能力按 `core / important / bonus` 三级上色，配色沿用 AI 解读的绿/金/灰，
+能力按 `core / important / bonus` 三级上色，沿用绿/金/灰三档，
 每条带 `jd_evidence` 原文——Career 定义是人可编辑的地基，得能对着 JD 核对。
 
 **当前 `capabilities` 是空的**：S1 已拆成「切边界」与「抽能力」两步，后者
@@ -374,14 +316,12 @@ Career 内的 company/title 在**前**、快照的在**后**，于是快照更�
 ## Chat Agent（2026-10-11）
 
 Chat 是主 Agent loop：system prompt 里只有工具说明，**所有事实都在文件里，由模型自己决定读哪个**。
-四个只读工具，schema 注册在 `chat.py::TOOLS`，**实现在 `tools.py`**：
+两个只读工具，schema 注册在 `chat.py::TOOLS`，**实现在 `tools.py`**：
 
 | 工具 | 返回 | 大小 |
 |---|---|---|
 | `read_persona` | 用户**最初上传的那份**履历与求职意向（经历、项目、技能、意向职位/城市/薪资） | 4KB |
 | `read_careers` | 6 个 Career 的定位、归属判据、能力清单、成员岗位，全量 | 19KB |
-| `read_job_gaps` | 岗位 × persona 差距解读的**索引**（公司/岗位/薪资/地点） | 5KB |
-| `read_job_gap(job_id)` | 单个岗位的完整解读：每条要求的匹配状态、缺什么、简历证据 | ~12KB |
 
 ### 领域的划分：注册归 chat，实现归 tools
 
@@ -392,20 +332,19 @@ Chat 是主 Agent loop：system prompt 里只有工具说明，**所有事实都
 `TOOLS`/`READERS` 注册表都留在 chat.py，而 `read_careers` 等实现从 `jobs.py`
 搬进 `tools.py`。
 
-**tools.py 因此不认识 HTTP**，四个只读工具直接读 `data/` 下的文件，不经 `jobs.py`
+**tools.py 因此不认识 HTTP**，只读工具直接读 `data/` 下的文件，不经 `jobs.py`
 的路由函数——两者用途不同（`/api/careers` 是给前端渲染，工具是给模型读的）。
-`jobs.py::_gaps` 改名 `gaps_by_job`，因为工具与路由共用它。
 
-依赖方向单向：`chat → tools → {persona, jobs, crawler}`、`chat → persona`、
-`jobs → persona`。**chat.py 已不 import crawler。**
+依赖方向单向：`chat → tools → {persona, jobs}`、`chat → persona`、`jobs → persona`。
+**chat.py 不 import crawler；采集只在离线脚本。**
 
 ### 上下文压缩：按 token 阈值，不按轮数（2026-10-11）
 
 原先用 `MAX_HISTORY = 20` 截断历史，有两个各自独立的毛病：
 
 1. **轮数与 token 无关。** 9 轮闲聊就能让单次请求到 10k+ token。实测固定开销
-   610（system + 工具声明）+ `read_careers` 返回 5370 + `read_job_gap` 最大 7082，
-   一轮就可能顶到 18k。
+   610（system + 工具声明）+ `read_careers` 返回 5370，
+   一轮就可能顶到 6k。
 2. **工具结果不跨轮持久化。** `_history` 只收 user 文本与 assistant 回复，
    `read_careers` 那 5370 token 只活在单次请求的局部列表里。且 9 轮窗口会把
    前几题挤出历史——后续做 S2/S3 追问流程时，模型到第 8 题就已经想不起 Q1。
@@ -440,95 +379,34 @@ Chat 是主 Agent loop：system prompt 里只有工具说明，**所有事实都
   给会话起个标题，失败退回首条用户消息截断。会话**没有 TTL**：可见、可删的东西
   就该一直在，静默过期反而是数据丢失。
 
-### 四个决定
+### 三个决定
 
 1. **persona 不再常驻 system prompt。** 原先 `_system_with_persona()` 每轮把整份 JSON 拼进
    system message（4KB ≈ 2k token），现在改成工具按需读：省 token，也让「读文件」这件事
    本身成为模型的显式动作。
-2. **`job_gaps` 两段式。** 全量 438KB（30 岗 ≈ 15KB/岗）读不动，且必然顶穿 Groq 的
-   7000 输入 token 闸门（`common.py:101`）。先给 5KB 索引、模型挑中再按 `job_id` 读单条，
-   单次上限因此可控。
-3. **`careers` 一次全量。** 只有 6 个 Career，模型要横向比较；两段式会让它多绕一次，
+2. **`careers` 一次全量。** 只有 6 个 Career，模型要横向比较；两段式会让它多绕一次，
    而且得先知道叫什么名字才能查。
-4. **读工具不产出前端卡片。** `search_boss_jobs` 原本把结果旁路成 `resp["jobs"]` 给前端，
-   读工具纯做上下文注入，不碰渲染。
+3. **读工具不产出前端卡片。** 工具纯做上下文注入，不碰渲染。
 
-### 暂时停用的两个工具
+### 停用的工具
 
-`update_persona`（写求职意向）与 `search_boss_jobs`（搜岗位）已从 `TOOLS` 摘掉，
-`save_targets` 调用留在 `chat.py` 的 dispatch 分支，`search_jobs` 实现在 `tools.py`
-（原 `chat.py::_search_jobs`，去掉下划线是因为它是跨模块公开的实现）。
-想开回来把它们加回 `TOOLS` 即可。dispatch 走 `READERS` 字典，`_execute_tool` 里
-先查 `READERS` 再落到旧分支——不加这个字典，读工具会被旧代码当成 `search_boss_jobs`
-去搜岗位。
-
-`search_jobs` 是**唯一会写 `data/` 事实源的工具**（落 `boss_jobs.json` 覆盖快照），
-其余只读工具不写。另有一类写的是 `data/resumes/`——`copy_from_persona` 建底稿、
-`apply_edits` 改正文，但**触发者是用户不是 LLM**（见下节）。
-
-## Resume 页与简历所有权（2026-10-11）
-
-**简历是用户的文件，不是 AI 的产物。** AI 在简历上只剩两个动作：**问**（S2 的追问清单）
-和**评**（`critique_resume`，筛简历那步，只读不写）。`draft()` / `rewrite()` 已删，
-`draft_resume` / `rewrite_resume` / `apply_resume_edits` 三个工具从 `TOOLS` 摘掉，
-工具从 9 个降到 7 个。
-
-**上下文里永远是最新的。** 进简历模式后，简历正文进 **system prompt** 而不是 history——
-`auto_compact` 压的是 history，贴进去会被压成摘要，模型就拿着改之前的旧版本跟用户讨论。
-每轮现读磁盘，尾部带一句「你在这段对话里读到的、记下的任何简历内容一律作废」。
-顺带把 `read_persona` 描述改成「他**最初上传的那份**」：用户改完简历后 persona 与
-简历会分叉，模型最可能在这里出精神错乱。
-
-**Resume 页**（tabbar：Chat | **Resume** | Jobs | Career | Me）：
-- 每个 Career 默认一份底稿（`ensure_all`，逐字拷 persona 去掉求职意向，**零 LLM**）
-- 卡片平时只读，右上角 Edit 图标；点开才变成输入框，改完点「提交」才发请求
-- **不挂 AI 评语**——评语是 Argus 在 Chat 里说的话
-- 删除换成垃圾桶图标；删整段经历要点两次（3 秒后自动复原）
-
-**patch 机制保留，触发者从 LLM 变成用户。** `apply_edits` 现在唯一的调用方是
-`POST /api/resumes/{id}/edits`，前端表单把字段换算成 ops 发过来。
-结构化表单天生知道「用户改的是哪个 JSON Pointer」，所以它没进冷冻室。
-
-**前端按「谁消费它」拆成两份**，跟 `cards.js` / `job.js` 一个路子：
-- `resume.js`——共享件：Chat 全文卡、Career 软链、索引拉取（`loadIndex`）、只读渲染（`work`）
-- `resumepage.js`——Resume 页：列表、详情、编辑器、真路径路由（`/resume/<id>`）
-
-### 约定
-
-- `StaticFiles` mount在 `/` **必须放在所有 API 路由声明之后**，否则会遮蔽它们。
-- **静态资源一律 `Cache-Control: no-store`**（`main.py` 中间件）。不设这个头时浏览器
-  会用 `Last-Modified` 做启发式缓存：文件刚改过（Last-Modified 是几分钟前）就仍算
-  「新鲜」而继续跑旧 JS，PWA 模式下 Safari 判得更松，改完前端不生效只能强刷。
-  自用开发机，牺牲缓存换「改完刷新就是新的」
-- 前端所有 API 调用走相对路径 `/api/...`，由同一个 FastAPI 进程 serve，无需 CORS、无需 dev server 代理。
-- **改 JS 后必须做模块图可达性检查**：`index.html` 只加载 `js/app.js`，
-  其余模块靠 import 链到达。裸副作用导入 `import "./x.js"`（没有 `from`）
-  最容易在重写入口文件时被漏掉——文件在磁盘上、代码看着完全合理，但浏览器不下载它。
-  检查要同时匹配 `from "..."` 和 `import "..."` 两种形式。
+`update_persona`（写求职意向）已从 `TOOLS` 摘掉，求职意向由 persona 上传/前端接口维护。
+岗位采集也不再是 Chat 工具：离线 `scripts/crawl_jobs.py` 负责推荐流 → 详情 JD →
+`boss_jobs.json`。
 
 ## Crawler (2026-10-08 定稿)
 
 - **BOSS 推荐流 `wapi/zpgeek/recommend/job/list.json` 上限约 30 条**（2 批，每批 15 条，`page=1` 且 `hasMore` 为空；第 3 批 `Network.requestWillBeSent` 无新请求，滚动 3 次重试仍 `None`，`diag_net.py` 复现）。`crawler.py` `fetch_boss_recommendations` 初始 `Page.navigate zhipin.com` 即拿 15 条，滚动仅再得 1 批；`max_batches=5` 亦止于 30。
-- **全量搜索 `wapi/zpgeek/search/joblist.json` 已封 `code:37 zpData seed`**，`ScraperAPI premium+render` 44k 滑块，不可用；当前唯一真实源为推荐流，猎聘 Liepin 为回退。
+- **全量搜索 `wapi/zpgeek/search/joblist.json` 已封 `code:37 zpData seed`**，ScraperAPI 路线不可用；当前唯一真实源为推荐流。
 - **全量 JD**：`fetch_boss_details` 复用 `vendor/boss-zhipin-scraper scrape_details` 逐条 `job_detail` 拿 `jd/skill_tags/boss_active_status`，`extract_detail_fields` 校验；`jd` 为空视为关闭过滤，不入 `boss_jobs.json`。
-- **存储语义**：`data/boss_jobs.json` 为**覆盖快照**（`save_snapshot`，`data/jobs.json` 已废弃删除），物理意义=当前推荐开放中岗位，非追加；仅保留带 `jd` 的开放岗。
+- **存储语义**：`data/<用户>/boss_jobs.json` 为**覆盖快照**（`save_snapshot`），物理意义=当前推荐开放中岗位，非追加；仅保留带 `jd` 的开放岗。
+- **桌面采集**：先在电脑上 `bash scripts/setup_boss.sh` 登录独立 Chrome；之后 `ARGUS_USER=xxx bash scripts/crawl_jobs.sh` 采集并推 R2。
 
 ## 尚未决定（不要自行假设）
 
-- Persona 的存储 schema 与 Evidence 链怎么建模
-- 接哪个 LLM 做 Persona 抽取 / Gap Analysis，以及是否流式。
-  （Gap Analysis 已经跑起来了，走 `common.active_chain` 的容灾链，
-  这一批 30 个岗位实际分布在 gemini-3.5-flash / glm-4.7-flash / deepseek-v4-flash
-  三个模型上——**逐岗位独立选模型，不是整个批次一个模型**。
-  解读是否流式仍未定，目前是跑批产出 JSON 文件、页面按需读文件。）
-- 前端在 Phase 1 之后是否升级为 React + Vite（引入构建链）
-- 前端形态（对话流 / Persona 面板 / Gap 列表）如何对应 README 的 MVP 五个模块。
-  （岗位维度的 AI 解读已接入详情页，跨岗位的 Gap 频次视图还没做——
-  `gap_canonical_tag` 是为跨岗位统计设计的，数据已经就位，界面还没有。）
-- `job_gaps.json` 的生命周期：目前**不入 git**（`.gitignore` 第 226 行 `data/`
-  整目录忽略），重跑 cluster 是全量覆盖。重跑后页面上的解读会变，要不要版本化留档未定。
-  注意这意味着**换台机器 clone 下来没有解读数据**，页面会对所有岗位显示成无解读
-
+- Persona 的存储 schema 与 Evidence 链怎么建模。
+- 前端是否升级为 React + Vite，以及页面形态如何对应 README 的 MVP 五个模块。
+- 岗位详情是否重新做 AI 解读；当前 `job_gaps` 已退役，不再有解读接口。
 
 ## Persona Schema（2026-10-03 定稿，**2026-10-04 已作废**）
 

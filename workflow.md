@@ -78,7 +78,7 @@ S4 不再调 LLM：简历是用户的文件，不是 AI 的产物。AI 在简历
 **按岗位职能切**，不按行业切——职能相同则能力要求相近，S4 的简历可复用。
 
 一次调用读全部 JD（当前 30 岗合计 14515 字符，一次读得完），
-**不是每岗一次调用**。与 `cluster_jobs.py` 当初拒绝聚类的理由不冲突：
+**不是每岗一次调用**。与旧聚类脚本当初拒绝逐岗调用的理由不冲突：
 当时是 30 个独立调用、彼此无参照系，现在是**一次调用产出全局划分**。
 
 输出必须包含 `job_id → career` 的映射并落盘。归属结果不能每次重算：
@@ -154,8 +154,7 @@ persona 是用户**自己上传的、他觉得做得好的项目集合**。它�
 - `data/boss_jobs.json` — 30 个岗位，覆盖快照，仅保留带 `jd` 的开放岗
 - `data/careers.json` — S1 产物：6 个 Career，各带定位、归属判据与成员岗位。
   由 `scripts/build_careers.py` 生成，**人可编辑**，Career 页直接读它展示（见 `tech_doc.md`）
-- `data/job_gaps.json` — 30 条单岗位 × persona 的分析（legacy）。
-  新框架里 S2 取代它，但 `requirements_deep_dive` 可作 S1 的参考输入
+- `data/job_gaps.json` — legacy 数据；生成脚本已删除，只保留历史参考。
 
 ---
 
@@ -171,7 +170,7 @@ persona 是用户**自己上传的、他觉得做得好的项目集合**。它�
 
 触发条件：S4 / S5 产物落地、且真实跑过一轮投递面试之后。
 届时需要的最小记录：job_id、Career、简历版本、走到哪一轮、实际被问了什么。
-届时可复用 `job_gaps.json` 已有的 `requirements_deep_dive` 作为对照基线。
+旧 `job_gaps.json` 里的 `requirements_deep_dive` 可作为历史参考（脚本已删除）。
 
 ---
 

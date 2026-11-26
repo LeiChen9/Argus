@@ -2,7 +2,7 @@
 
 - read_env_key: 从项目根 .env 读 key
 - ENDPOINTS + MODEL_CHAIN: 模型容灾链的唯一事实源
-- call_llm / call_llm_stream: 离线入口（同步签名，openai SDK 传输）
+- call_llm: 离线入口（同步签名，openai SDK 传输）
 - call_llm_async / call_llm_stream_async: Worker 入口（js.fetch 传输）
 - clean_llm_json: 去 markdown 代码块后解析 JSON
 
@@ -360,31 +360,12 @@ _SDK_FACTORIES = {
 
 
 async def _sdk_create(item, messages, tools, temperature, max_tokens, on_delta=None) -> dict:
-    """离线传输：openai SDK。同步调用包一层 async，让链主循环统一 await。
-
-    tool_calls 的形状与从前逐字节一致（非流式是 SDK message 对象、流式是
-    SimpleNamespace 列表）——chat.py 的消费端还没动，C2 统一成 dict。
-    """
-    stream = on_delta is not None
+    """离线传输：openai SDK。离线只跑非流式，Worker 的流式走 _fetch_create。"""
     resp = _SDK_FACTORIES[item["endpoint"]]().chat.completions.create(
         model=item["name"], messages=messages,
-        **_chat_kwargs(tools, temperature, max_tokens, stream))
-    if not stream:
-        msg = resp.choices[0].message
-        return {"content": msg.content, "tool_calls": msg.tool_calls}
-    acc = _DeltaAcc()
-    for ch in resp:
-        new = acc.add(ch.choices[0].delta)
-        if new:
-            on_delta(new)
-    # tool_calls 包回 SimpleNamespace：chat.py 的消费端按属性访问（t.function.name），
-    # 与从前的形状逐字节一致。fetch 传输回 dict，C2 chat 上 Worker 时统一。
-    from types import SimpleNamespace as NS
-    calls = acc.result()
-    ns_calls = [NS(id=c["id"], function=NS(name=c["function"]["name"],
-                                           arguments=c["function"]["arguments"]))
-                for c in calls] if calls else None
-    return {"content": acc.text, "tool_calls": ns_calls}
+        **_chat_kwargs(tools, temperature, max_tokens, False))
+    msg = resp.choices[0].message
+    return {"content": msg.content, "tool_calls": msg.tool_calls}
 
 
 async def _fetch_create(item, messages, tools, temperature, max_tokens, on_delta=None) -> dict:
@@ -626,13 +607,6 @@ def call_llm(messages: list[dict], *, tools=None, temperature=0.7,
                                   temperature=temperature, pinned=pinned, max_tokens=max_tokens))
 
 
-def call_llm_stream(messages: list[dict], on_delta, *, tools=None, temperature=0.7,
-                    pinned=None, max_tokens=None) -> dict:
-    """离线流式入口：SDK 传输，语义同 call_llm。"""
-    return asyncio.run(_run_chain(_sdk_create, messages, tools=tools, temperature=temperature,
-                                  pinned=pinned, max_tokens=max_tokens, on_delta=on_delta))
-
-
 async def call_llm_async(messages: list[dict], *, tools=None, temperature=0.7,
                          pinned=None, max_tokens=None, allow_endpoints=None) -> dict:
     """Worker 入口：fetch 传输。chat 上 Worker 时换这个（C2）。"""
@@ -648,17 +622,6 @@ async def call_llm_stream_async(messages: list[dict], on_delta, *, tools=None, t
     return await _run_chain(_fetch_create, messages, tools=tools, temperature=temperature,
                             pinned=pinned, max_tokens=max_tokens, on_delta=on_delta,
                             on_reset=on_reset, allow_endpoints=allow_endpoints)
-
-
-def ask_json(prompt: str, blocks: list[str], temperature: float = 0.7,
-             model: str | None = None, max_tokens: int | None = None) -> dict:
-    """一次 LLM 调用要回 JSON。blocks 是跟在 prompt 后面的几段材料，各自一个 user 消息。
-
-    model 非空时把它提到容灾链首（见 _run_chain 的 pinned）。
-    """
-    messages = [{"role": "user", "content": prompt},
-                *({"role": "user", "content": b} for b in blocks)]
-    return clean_llm_json(call_llm(messages, temperature=temperature, pinned=model, max_tokens=max_tokens)["content"])
 
 
 async def ask_json_async(prompt: str, blocks: list[str], temperature: float = 0.7,

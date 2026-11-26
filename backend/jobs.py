@@ -4,10 +4,9 @@
 batches 追加记录每次采集的关键词、来源与意向快照。
 
 HTTP 层不在这里：Worker 侧只读 API 在 api_read.py（入口路由表在
-entrypoint_worker.py），本模块只留领域函数。job_gaps 已退役，相关读取不再提供。
+entrypoint_worker.py），本模块只留领域函数。
 """
 
-import json
 import os
 import time
 from pathlib import Path
@@ -20,7 +19,6 @@ from utils import load_file, save_file
 USER = os.environ.get("ARGUS_USER", "lbb")
 
 STORE = Path(__file__).resolve().parents[1] / "data" / USER / "boss_jobs.json"
-GAPS = Path(__file__).resolve().parents[1] / "data" / USER / "job_gaps.json"
 CAREERS = Path(__file__).resolve().parents[1] / "data" / USER / "careers.json"
 
 
@@ -95,33 +93,4 @@ def career_documents() -> dict:
                            for j in f.get("jobs", [])]}
             for f in doc.get("careers", [])
         ],
-    }
-
-
-def gaps_by_job() -> dict:
-    """{job_id: {"generated_at", "model", "analysis"}}
-
-    data/job_gaps.json 的归一化视图。job_gaps 已退役：离线脚本 cluster_jobs.py 停用，
-    Worker 侧不再提供它的读取入口。函数留着，重启这条线时不用重写。
-    """
-    if not GAPS.exists():
-        return {}
-    doc = json.loads(GAPS.read_text(encoding="utf-8"))
-    at = doc.get("generated_at", "")
-    # 带上跑这一批时的求职意向：intent_match 只说 aligned/above_target，
-    # 没有目标值就说不出"对齐到什么"，前端得自己知道 25k-30k / 上海 才对得上。
-    persona = doc.get("persona", {})
-    target = {
-        "target_base": persona.get("target_base", ""),
-        "target_salary": persona.get("target_salary", ""),
-        "target": persona.get("target", []),
-    }
-    return {
-        r["job"]["id"]: {
-            "generated_at": at,
-            "model": r.get("model", ""),
-            "analysis": r.get("analysis", {}),
-            "target": target,
-        }
-        for r in doc.get("results", [])
     }

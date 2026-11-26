@@ -152,12 +152,3 @@ export async function loadMe() {
   }
   return root();
 }
-
-// 未登录时把用户送到 Me 页（app.js 的登录闸门用）
-export async function ensureLogin() {
-  try {
-    return await apiJson("/api/me");
-  } catch {
-    return null;
-  }
-}

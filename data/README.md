@@ -11,7 +11,7 @@
 | `_auth/sessions/<token>.json` | **Web 登录**（随机 token，登出删除） | 不同步 |
 | `users/<用户>/boss_jobs.json` | 离线（crawler 快照，**每个账号独立采集**，`backend/jobs.py::save_snapshot`，覆盖式） | 跑完 crawler 执行 `scripts/r2_push.sh` |
 | `users/<用户>/careers.json` | 离线（`scripts/build_careers.py`、`scripts/extract_capabilities.py`，**每个账号独立生成**） | 同上 |
-| `users/<用户>/job_gaps.json` | 离线（`scripts/cluster_jobs.py`，legacy 已停用） | 不推，退役中 |
+| `users/<用户>/job_gaps.json` | legacy 数据，生成脚本已删除 | 不推 |
 | `users/<用户>/resumes/{career}.json` | **Web**（用户在 Resume 页手改，经 Worker 写 R2） | `scripts/r2_pull.sh` 拉回本地 |
 | `users/<用户>/persona.json` | **Web**（上传简历 / 改求职意向，经 Worker 写 R2） | 同上 |
 | `users/<用户>/chat_sessions/` | **Web**（chat 会话，Worker 写 R2） | 同上，本地只是留档 |

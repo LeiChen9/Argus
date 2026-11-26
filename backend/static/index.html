@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" href="assets/icon-180.png">
 <link rel="manifest" href="site.webmanifest">
 <title>Argus</title>
-<link rel="stylesheet" href="css/app.css?v=20261126i">
+<link rel="stylesheet" href="css/app.css?v=20261126p">
 </head>
 <body>
 <div class="app">
@@ -92,7 +92,10 @@
 
     <!-- ── Resume：用户自己的简历（tabbar 在 Chat 和 Jobs 之间） ── -->
     <section class="view view--resume" id="view-resume" hidden>
-      <p class="rlist__note">简历是你的，改动只在你亲手保存时发生。AI 只负责追问和评价。</p>
+      <header class="page-head">
+        <h1 class="page-title">Resume</h1>
+        <p class="page-sub">简历是你的，改动只在你亲手保存时发生。AI 只负责追问和评价。</p>
+      </header>
       <div class="rlist" id="resume-list">
         <p class="placeholder__note">加载中…</p>
       </div>
@@ -116,7 +119,10 @@
 
     <!-- ── Jobs：持久化的岗位卡片 ── -->
     <section class="view view--jobs" id="view-jobs" hidden>
-      <p class="jobs__meta" id="jobs-meta"></p>
+      <header class="page-head">
+        <h1 class="page-title">Jobs</h1>
+        <p class="page-sub" id="jobs-meta"></p>
+      </header>
       <div class="jobs__grid" id="jobs-grid">
         <p class="placeholder__note">加载中…</p>
       </div>
@@ -141,13 +147,23 @@
 
     <!-- ── Career：职能地图（S1 产物，scripts/build_careers.py 生成） ── -->
     <section class="view view--career" id="view-career" hidden>
-      <div class="placeholder">
-        <p class="placeholder__note">还没跑过 S1，去项目根跑一次 build_careers.py</p>
+      <header class="page-head">
+        <h1 class="page-title">Career</h1>
+        <p class="page-sub">岗位地图与能力清单</p>
+      </header>
+      <div class="career-list" id="career-list">
+        <div class="placeholder">
+          <p class="placeholder__note">还没跑过 S1，去项目根跑一次 build_careers.py</p>
+        </div>
       </div>
     </section>
 
     <!-- ── Me：登录 / 账号 / token 用量 ── -->
-    <section class="view view--center" id="view-me" hidden>
+    <section class="view view--me" id="view-me" hidden>
+      <header class="page-head">
+        <h1 class="page-title">Me</h1>
+        <p class="page-sub">账号与用量</p>
+      </header>
       <div class="me" id="me-body"></div>
     </section>
 
@@ -195,6 +211,6 @@
   </nav>
 
 </div>
-<script type="module" src="js/app.js?v=20261126j"></script>
+<script type="module" src="js/app.js?v=20261126p"></script>
 </body>
 </html>

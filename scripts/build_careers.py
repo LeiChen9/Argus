@@ -128,7 +128,7 @@ careers 数组最多 3 项。未被任何 Career 收录的岗位即为丢弃，�
 def build_messages(jobs: list[dict]) -> list[dict]:
     """instruction 与素材分成两条消息。
 
-    理由同 cluster_jobs.py：CLUSTER_PROMPT 里含大量 JSON 花括号，
+    理由同旧聚类脚本：CLUSTER_PROMPT 里含大量 JSON 花括号，
     用 .format() 会撞 KeyError；指令与数据分开，模型对「照这个格式输出」
     和「照这批内容分类」的注意力分配也更干净。
     """

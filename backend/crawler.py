@@ -1,15 +1,8 @@
 import sys
-import urllib.parse
+import time
 from pathlib import Path
 
-import httpx
-import time
-from common import call_llm, clean_llm_json, read_env_key
-
-# 只归离线：本模块只被 tools.search_jobs 引用（已停用未注册），绝不进 Worker。
-# key 在模块级读——与从前 common.py 里的时机一致，缺 .env 时 import 即报错，
-# 而不是等到真去抓的时候才炸。
-SCRAPER_API_KEY = read_env_key("scraper_apiKey")
+# 只归离线：桌面采集脚本 scripts/crawl_jobs.py 调用，绝不进 Worker。
 
 BOSS_VENDOR_SCRIPTS = Path(__file__).resolve().parent.parent / "vendor" / "boss-zhipin-scraper" / "scripts"
 BOSS_CDP_PORT = 9222
@@ -83,47 +76,3 @@ def fetch_boss_recommendations(max_batches: int = 2, timeout: float = 45.0) -> l
             cdp.send("Target.closeTarget", {"targetId": tid})
         finally:
             cdp.close()
-
-CITY_DQS = {
-    "上海": "020",
-    "北京": "010",
-    "广州": "050020",
-    "深圳": "050090",
-    "杭州": "070020",
-    "成都": "090020",
-    "南京": "060020",
-    "苏州": "070030",
-    "武汉": "180020",
-    "西安": "200020",
-}
-
-def fetch_liepin_html(keyword: str) -> str:
-    city = next((c for c in CITY_DQS if c in keyword), "")
-    q = keyword.replace(city, "").strip() if city else keyword.strip()
-    if not q:
-        q = keyword.strip()
-    url = f"https://www.liepin.com/zhaopin/?key={urllib.parse.quote(q)}"
-    if city:
-        url += f"&dqs={CITY_DQS[city]}"
-    params = {"api_key": SCRAPER_API_KEY, "url": url, "render": "true", "premium": "true", "country_code": "cn"}
-    with httpx.Client(timeout=90.0) as client:
-        for attempt in range(3):
-            resp = client.get("http://api.scraperapi.com/", params=params)
-            if resp.status_code < 500:
-                resp.raise_for_status()
-                return resp.text
-            if attempt == 2:
-                resp.raise_for_status()
-            time.sleep(2 ** attempt)
-    raise RuntimeError("ScraperAPI 多次 5xx")
-
-def parse_jobs(html: str) -> list[dict]:
-    prompt = "分析以下猎聘 HTML，提取职位列表，字段固定为 title/company/salary/link。只输出 JSON 数组。"
-    msg = call_llm([{"role": "user", "content": f"{prompt}\n\n{html[:80000]}"}], temperature=0.1, max_tokens=8192)
-    jobs = clean_llm_json(msg["content"] or "[]")
-    out = []
-    for j in jobs:
-        if not isinstance(j, dict):
-            continue
-        out.append({"title": j.get("title") or j.get("job_title") or j.get("name") or "", "company": j.get("company") or "", "salary": j.get("salary") or "", "link": j.get("link") or j.get("url") or ""})
-    return out

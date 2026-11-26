@@ -1,5 +1,4 @@
-/* 极小的 DOM 工具：job.js 和 analysis.js 都要用 el/deRadical，
-   单独成文件是为了不出现 analysis ← job ← analysis 的循环依赖。 */
+/* 极小的 DOM 工具：列表/详情页共用的 el、deRadical 与 fold。 */
 
 // 抓取器的字体解码会把常用字还原成康熙部首（建⽴⽬标）。只对这几个码位段做
 // NFKC——整串 NFKC 会把全角逗号也压成半角。LLM 引用的 JD 原文同样带着这些部首

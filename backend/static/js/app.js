@@ -1,7 +1,7 @@
 import { greeting } from "./greeting.js";
 import { go, route, routeId, onRouteChange } from "./nav.js";
-import { loadJobs } from "./jobs.js?v=20261126j";
-import { loadCareer } from "./career.js";
+import { loadJobs } from "./jobs.js?v=20261126p";
+import { loadCareer } from "./career.js?v=20261126p";
 import { initJobDetail, openJob } from "./job.js";
 import { loadResume, initResumeDetail, openResume } from "./resumepage.js";
 import { loadMe, onAuthChange } from "./me.js?v=20261126g";

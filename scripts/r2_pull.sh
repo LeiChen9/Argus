@@ -11,7 +11,7 @@
 # R2 上每个用户一个命名空间 users/<用户名>/，本机同样：data/lbb/、data/alice/……
 # 默认 lbb，给别人拉就 ARGUS_USER=alice bash scripts/r2_pull.sh
 #
-# 什么时候跑：要用离线脚本（build_careers / cluster_jobs）之前先拉一次，
+# 什么时候跑：要用离线脚本（build_careers / extract_capabilities）之前先拉一次，
 # 否则读到的是上周的简历。
 set -euo pipefail
 

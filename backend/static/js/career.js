@@ -7,7 +7,7 @@ import { jobCards } from "./cards.js";
 import { fetchResumes, resumeLink } from "./resume.js";
 import { api, errNote } from "./api.js";
 
-const stage = document.getElementById("view-career");
+const list = document.getElementById("career-list");
 
 const LEVEL = { core: "核心", important: "重要", bonus: "加分" };
 
@@ -43,10 +43,10 @@ export const loadCareer = () =>
     // 区分「取不到」和「还没有」：后端没重启时这接口是 404，冒充成「还没跑
     // S1」是骗人——S1 可能早就跑过了，文件就在 data/ 里躺着。
     if (!doc) {
-      stage.replaceChildren(errNote(new Error("取不到 Career"), "取 Career"));
+      list.replaceChildren(errNote(new Error("取不到 Career"), "取 Career"));
       return;
     }
     if (doc.careers.length) {
-      stage.replaceChildren(...doc.careers.map((f) => career(f, resumes.get(f.career_id))));
+      list.replaceChildren(...doc.careers.map((f) => career(f, resumes.get(f.career_id))));
     }
-  }).catch((e) => stage.replaceChildren(errNote(e, "取 Career")));
+  }).catch((e) => list.replaceChildren(errNote(e, "取 Career")));

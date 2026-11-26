@@ -39,7 +39,7 @@ onAuthChange((on) => {
   else if (route() !== "home") go("me");
 });
 
-// 导航：底部 tabbar 去掉了，入口集中在首页那一排。
+// 导航：底部固定 tabbar，入口在页面最下方。
 const enter = (view) => {
   if (!loggedIn && view !== "home" && view !== "me") {
     if (view === "chat") sessionStorage.setItem("argus_after_login", "chat");
@@ -59,7 +59,7 @@ const enter = (view) => {
 // 浏览器前进/后退换了路径：按路径切页（用户手改地址栏也走这里）。
 onRouteChange(enter);
 
-for (const item of document.querySelectorAll(".homenav__item")) {
+for (const item of document.querySelectorAll(".tab")) {
   item.addEventListener("click", () => enter(item.dataset.view));
 }
 

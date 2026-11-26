@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon" href="assets/icon-180.png">
 <link rel="manifest" href="site.webmanifest">
 <title>Argus</title>
-<link rel="stylesheet" href="css/app.css?v=20261126g">
+<link rel="stylesheet" href="css/app.css?v=20261126i">
 </head>
 <body>
 <div class="app">
@@ -62,48 +62,6 @@
         </div>
         <p class="greeting" id="greeting"></p>
       </div>
-      <!-- ── 首页内容底部的导航排。不固定：跟着内容走，只有首页有 ── -->
-      <nav class="homenav" id="homenav" aria-label="主导航">
-            <button class="homenav__item" data-view="chat" type="button">
-              <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
-        <path d="M9 4.5h10a6 6 0 0 1 6 6v3.5a6 6 0 0 1-6 6h-3.6l-5.4 3.2V20H9a6 6 0 0 1-6-6v-3.5a6 6 0 0 1 6-6Z" fill="currentColor"/>
-      </svg>
-              <span>Chat</span>
-            </button>
-            <button class="homenav__item" data-view="resume" type="button">
-              <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
-        <path d="M7.5 4.5h9.2L22 9.8v13.7a1 1 0 0 1-1 1H7.5a1 1 0 0 1-1-1v-18a1 1 0 0 1 1-1Z"
-              stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" opacity=".42"/>
-        <path d="M16.4 4.6v4.9a1 1 0 0 0 1 1h4.4" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" opacity=".42"/>
-        <path d="M10.6 14h7M10.6 17.6h7M10.6 21.2h4.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-      </svg>
-              <span>Resume</span>
-            </button>
-            <button class="homenav__item" data-view="jobs" type="button">
-              <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
-        <path d="M7.5 20.5h13" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" opacity=".38"/>
-        <circle cx="7.5" cy="20.5" r="3" fill="currentColor"/>
-        <circle cx="14" cy="14.5" r="2.6" fill="currentColor" opacity=".62"/>
-        <circle cx="20.5" cy="8.5" r="2.2" fill="currentColor" opacity=".32"/>
-      </svg>
-              <span>Jobs</span>
-            </button>
-            <button class="homenav__item" data-view="career" type="button">
-              <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
-        <circle cx="14" cy="14" r="9.9" stroke="currentColor" stroke-width="1.7" opacity=".28"/>
-        <path d="M20.6 7.4 14 14 7.4 20.6 12.6 12.6Z" fill="currentColor" opacity=".45"/>
-        <path d="M20.6 7.4 14 14 12.6 12.6Z" fill="currentColor"/>
-      </svg>
-              <span>Career</span>
-            </button>
-            <button class="homenav__item" data-view="me" type="button">
-              <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
-        <circle cx="14" cy="9.8" r="4.8" fill="currentColor"/>
-        <path d="M14 16.6c-4.7 0-8.5 3.2-8.5 7.1v.8h17v-.8c0-3.9-3.8-7.1-8.5-7.1Z" fill="currentColor"/>
-      </svg>
-              <span>Me</span>
-            </button>
-      </nav>
     </section>
 
     <!-- ── Chat：与 Argus 的对话（tabbar 让位给 composer） ── -->
@@ -195,8 +153,48 @@
 
   </main>
 
+  <nav class="tabbar" id="tabbar" role="tablist" aria-label="主导航">
+    <button class="tab" role="tab" data-view="chat" aria-selected="false" aria-controls="view-chat">
+      <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
+        <path d="M9 4.5h10a6 6 0 0 1 6 6v3.5a6 6 0 0 1-6 6h-3.6l-5.4 3.2V20H9a6 6 0 0 1-6-6v-3.5a6 6 0 0 1 6-6Z" fill="currentColor"/>
+      </svg>
+      <span>Chat</span>
+    </button>
+    <button class="tab" role="tab" data-view="resume" aria-selected="false" aria-controls="view-resume">
+      <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
+        <path d="M7.5 4.5h9.2L22 9.8v13.7a1 1 0 0 1-1 1H7.5a1 1 0 0 1-1-1v-18a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" opacity=".42"/>
+        <path d="M16.4 4.6v4.9a1 1 0 0 0 1 1h4.4" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" opacity=".42"/>
+        <path d="M10.6 14h7M10.6 17.6h7M10.6 21.2h4.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+      <span>Resume</span>
+    </button>
+    <button class="tab" role="tab" data-view="jobs" aria-selected="false" aria-controls="view-jobs">
+      <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
+        <path d="M7.5 20.5h13" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" opacity=".38"/>
+        <circle cx="7.5" cy="20.5" r="3" fill="currentColor"/>
+        <circle cx="14" cy="14.5" r="2.6" fill="currentColor" opacity=".62"/>
+        <circle cx="20.5" cy="8.5" r="2.2" fill="currentColor" opacity=".32"/>
+      </svg>
+      <span>Jobs</span>
+    </button>
+    <button class="tab" role="tab" data-view="career" aria-selected="false" aria-controls="view-career">
+      <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
+        <circle cx="14" cy="14" r="9.9" stroke="currentColor" stroke-width="1.7" opacity=".28"/>
+        <path d="M20.6 7.4 14 14 7.4 20.6 12.6 12.6Z" fill="currentColor" opacity=".45"/>
+        <path d="M20.6 7.4 14 14 12.6 12.6Z" fill="currentColor"/>
+      </svg>
+      <span>Career</span>
+    </button>
+    <button class="tab" role="tab" data-view="me" aria-selected="false" aria-controls="view-me">
+      <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
+        <circle cx="14" cy="9.8" r="4.8" fill="currentColor"/>
+        <path d="M14 16.6c-4.7 0-8.5 3.2-8.5 7.1v.8h17v-.8c0-3.9-3.8-7.1-8.5-7.1Z" fill="currentColor"/>
+      </svg>
+      <span>Me</span>
+    </button>
+  </nav>
 
 </div>
-<script type="module" src="js/app.js?v=20261126g"></script>
+<script type="module" src="js/app.js?v=20261126i"></script>
 </body>
 </html>

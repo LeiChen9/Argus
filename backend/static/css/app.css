@@ -241,52 +241,59 @@ button { font: inherit; color: inherit; }
 
 /* ── 首页导航中枢 ── */
 .view--home {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  align-items: safe center;
-  justify-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 22px;
-  padding: 16px 20px calc(24px + env(safe-area-inset-bottom));
+  padding: 16px 20px 24px;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
-/* 一整块，不是一堆小方块：外层是带毛玻璃和描边的容器，五个入口是容器里等分的
-   触区（mac 底栏那种感觉）。容器自己居中并限宽，桌面上不会拉成一条横贯的带。 */
-.homenav {
+.tabbar {
   flex: 0 0 auto;
   display: flex;
-  align-self: center;
-  width: 100%;
-  max-width: 460px;
-  margin-top: auto;   /* 贴内容底部；hero 短的时候也不会飘上去 */
-  padding: 5px;
-  border: 0.5px solid var(--hairline);
-  border-radius: 18px;
+  padding-bottom: env(safe-area-inset-bottom);
   background: var(--bar-bg);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
   backdrop-filter: blur(20px) saturate(180%);
-  box-shadow: 0 6px 20px rgba(58, 46, 34, 0.10);
+  border-top: 0.5px solid var(--hairline);
 }
 
-.homenav__item {
+.tab {
   flex: 1 1 0;
+  min-height: var(--bar-h);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 8px 2px 7px;
+  justify-content: center;
+  gap: 3px;
+  padding: 0;
   border: 0;
-  border-radius: 14px;
   background: none;
   color: var(--ink-3);
-  font: inherit;
-  font-size: 11px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
 }
-.homenav__item:active { background: var(--glow); transform: scale(0.95); }
-.homenav__item svg { width: 23px; height: 23px; }
+.tab svg { width: 25px; height: 25px; transition: transform 340ms var(--spring); }
+.tab span {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  transition: color 240ms var(--soft);
+}
+.tab[aria-selected="true"] { color: var(--accent); }
+.tab[aria-selected="true"] svg { animation: tabPop 420ms var(--spring); }
+.tab:active svg { transform: scale(.86); }
+.tabbar[hidden] { display: none; }
+
+@keyframes tabPop {
+  from { transform: scale(.84); }
+  55%  { transform: scale(1.08); }
+  to   { transform: scale(1); }
+}
 
 /* ── Placeholder ── */
 .placeholder { text-align: center; }
@@ -560,6 +567,8 @@ button { font: inherit; color: inherit; }
   -webkit-backdrop-filter: blur(20px) saturate(180%);
   backdrop-filter: blur(20px) saturate(180%);
 }
+
+.app.has-tabbar .composer { padding-bottom: 10px; }
 
 .composer__chip {
   margin: 0 0 7px;

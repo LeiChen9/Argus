@@ -30,7 +30,7 @@ from sessions import bind_r2 as bind_sessions
 from utils import bind_store, bind_writer
 
 # bindings 注入：模型 key 走 secret（Worker 里没有 /session/.env），
-# 会话落 R2（<用户>/chat_sessions/），数据文本灌 store，领域写经 writer 落 R2。
+# 会话落 R2（users/<用户>/chat_sessions/），数据文本灌 store，领域写经 writer 落 R2。
 common.bind_worker_env(workers_env)
 bind_sessions(workers_env)
 api_auth.bind_r2(workers_env)
@@ -72,7 +72,7 @@ async def _merge_usage(snapshot: dict) -> None:
 
 common.bind_usage_flush(_merge_usage)
 
-PROBE_KEY = "_spike/probe.json"
+PROBE_KEY = "_internal/probe.json"
 
 # 每个用户命名空间下的三个单文件 + resumes/ 前缀下的全部简历。合计 <300KB。
 STORE_KEYS = ("careers.json", "boss_jobs.json", "persona.json")

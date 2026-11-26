@@ -75,6 +75,13 @@ def main():
     expect(status, 200, "empty sessions", payload)
     assert payload["sessions"] == []
 
+    status, payload, _ = call("GET", "/api/jobs", cookie=token)
+    expect(status, 200, "empty jobs", payload)
+    assert payload["jobs"] == []
+    status, payload, _ = call("GET", "/api/careers", cookie=token)
+    expect(status, 200, "empty careers", payload)
+    assert payload["careers"] == []
+
     status, payload, _ = call("POST", "/api/chat/delete",
                               {"sid": "ghost"}, cookie=token)
     expect(status, 200, "delete ghost", payload)

@@ -12,17 +12,12 @@ import json, re, secrets, time
 
 from workers import Response
 
-USERS_KEY = "users.json"
+USERS_KEY = "_auth/users.json"
+SESSIONS_PREFIX = "_auth/sessions/"
 # **会话 cookie**（一年）：存的是随机 token，不是用户名。Cookie 名带版本号是
 # 故意的：上一版存的是用户名，换个名字等于把所有人立刻踢回未登录。登出会删
 # 掉 R2 里的 token，并显式写一个空的过期 cookie。
 COOKIE = "argus_user_v2"
-
-# 职位库和职能地图是**共享资产**（crawler 抓来的岗位侧数据，不含任何个人信息），
-# 新用户注册时从种子用户拷一份到自己名下，否则新账号进来是一片空白，看着像坏了。
-# 简历和 persona 绝不拷——那是他自己的东西。
-SEED_USER = "lbb"
-SEED_FILES = ("careers.json", "boss_jobs.json")
 
 # 用户名约束：R2 key 是路径，斜杠会把命名空间劈开；留白/怪字符会让 cookie 和
 # key 都难用。够用即可，不是安全边界（真正的边界是密码）。
@@ -40,13 +35,13 @@ def bind_r2(env) -> None:
 
 async def _issue(name: str) -> str:
     token = secrets.token_urlsafe(32)
-    await _env.DATA.put(f"_sessions/{token}.json", json.dumps({"user": name, "exp": time.time() + 31536000}))
+    await _env.DATA.put(f"{SESSIONS_PREFIX}{token}.json", json.dumps({"user": name, "exp": time.time() + 31536000}))
     return token
 
 
 async def resolve(token: str) -> str:
     try:
-        obj = await _env.DATA.get(f"_sessions/{token}.json")
+        obj = await _env.DATA.get(f"{SESSIONS_PREFIX}{token}.json")
         row = json.loads(await obj.text()) if obj else {}
     except Exception:
         return ""
@@ -101,16 +96,7 @@ async def register(body: dict) -> Response:
         raise Bad("这个用户名已经被注册了", status=409)
     users[name] = password
     await save_users(users)
-    await _seed_shared(name)
     return Response.json({"ok": True, "user": name}, headers=_cookie_header(await _issue(name)))
-
-
-async def _seed_shared(name: str) -> None:
-    """把共享的职位库/职能地图拷进新用户的命名空间。种子用户没这些文件就跳过。"""
-    for filename in SEED_FILES:
-        src = await _env.DATA.get(f"{SEED_USER}/{filename}")
-        if src is not None:
-            await _env.DATA.put(f"{name}/{filename}", await src.text())
 
 
 async def login(body: dict) -> Response:
@@ -127,7 +113,7 @@ async def login(body: dict) -> Response:
 
 async def logout(token: str) -> Response:
     try:
-        await _env.DATA.delete(f"_sessions/{token}.json")
+        await _env.DATA.delete(f"{SESSIONS_PREFIX}{token}.json")
     except Exception:
         pass
     return Response.json({"ok": True}, headers=_cookie_header(""))

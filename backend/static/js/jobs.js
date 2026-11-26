@@ -14,7 +14,7 @@ export const loadJobs = () => {
       if (!jobs.length) {
         const note = document.createElement("p");
         note.className = "placeholder__note";
-        note.textContent = "还没有岗位，去 Chat 里让 Argus 搜一轮吧";
+        note.textContent = "还没有岗位数据。先为这个账号跑一轮离线 crawler，再执行 r2_push.sh";
         grid.replaceChildren(note);
         return;
       }

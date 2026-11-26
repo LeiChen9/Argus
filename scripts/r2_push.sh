@@ -8,7 +8,7 @@
 #   users.json                   ← 不推：Web 注册会写 R2，本地旧副本推上去会
 #                                  删掉新注册的账号
 #
-# R2 上每个用户一个命名空间 <用户名>/，与本机 data/<用户名>/ 一一对应。
+# R2 上每个用户一个命名空间 users/<用户名>/，与本机 data/<用户名>/ 一一对应。
 # 默认 lbb，推别人的产物就 ARGUS_USER=alice bash scripts/r2_push.sh
 #
 # 典型用法：python3 scripts/build_careers.py && bash scripts/r2_push.sh
@@ -18,7 +18,7 @@ REMOTE="r2:argus-data"
 TARGET="${ARGUS_USER:-lbb}"
 cd "$(dirname "$0")/.."
 
-rclone copyto --progress "data/$TARGET/careers.json" "$REMOTE/$TARGET/careers.json"
-rclone copyto --progress "data/$TARGET/boss_jobs.json" "$REMOTE/$TARGET/boss_jobs.json"
+rclone copyto --progress "data/$TARGET/careers.json" "$REMOTE/users/$TARGET/careers.json"
+rclone copyto --progress "data/$TARGET/boss_jobs.json" "$REMOTE/users/$TARGET/boss_jobs.json"
 
 echo "推送完成：$TARGET/{careers.json, boss_jobs.json}"

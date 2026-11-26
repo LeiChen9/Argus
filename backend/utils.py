@@ -60,7 +60,7 @@ def current_user() -> str:
 def user_prefix() -> str:
     """R2 上该用户的命名空间。空用户返回空串，key 保持原样。"""
     user = _USER.get()
-    return f"{user}/" if user else ""
+    return f"users/{user}/" if user else ""
 
 
 def put_store(key: str, text: str) -> None:
@@ -107,7 +107,7 @@ def _store_key(path: Path) -> str | None:
     if not tail:
         return None
     user = _USER.get()
-    return f"{user}/{tail}" if user else f"{head}/{tail}"
+    return f"users/{user}/{tail}" if user else f"{head}/{tail}"
 
 
 # ── 写通道（Worker 模式）───────────────────────────────────────────────
